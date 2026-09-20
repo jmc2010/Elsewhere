@@ -47,10 +47,15 @@ about nine seconds.
 - **0005 brand cuisine map** — applied. 201 chain names → cuisine, plus a
   `norm_place_name()` function. Closes **34.1%** of the no-cuisine gap
   (4,454 of 13,052 rows). Every row is `reviewed = false`.
-- **0006 chicken cuisine** — written, **not yet applied**. Adds a `chicken`
-  leaf under `american` and moves 16 brands onto it (974 places). Decided
-  2026-09-20: one leaf, not a fried/rotisserie split, because Overture gives
-  only `chicken_restaurant` and there is no signal to split on.
+- **0006 chicken cuisine** — applied. Adds a `chicken` leaf under `american`
+  and moves 16 brands onto it (974 places). Decided 2026-09-20: one leaf, not
+  a fried/rotisserie split, because Overture gives only `chicken_restaurant`
+  and there is no signal to split on.
+- **0007 delivery-only brands** — written, **not yet applied**. Flags the 9
+  ghost-kitchen brands (145 places) rather than dropping them. Decided
+  2026-09-20: keep and flag. They are real answers to "what can we order
+  tonight" and wrong answers to "where should we go", so the flag keeps both
+  futures open where dropping at ingest would not.
 
 ### Connecting to Supabase from this machine
 
@@ -74,10 +79,15 @@ from brand_cuisine_map b join cuisines c on c.id = b.cuisine_id
 where b.confidence < 0.8 order by b.confidence;
 ```
 
-After 0006 that queue is **38 rows**, down from 53 — the 0.65–0.75 judgment
-calls. `Dairy Queen` (`ice-cream`) versus `DQ Grill & Chill` (`burgers`) is
-the one most worth a second opinion; the brand is genuinely split and the map
-currently disagrees with itself on purpose.
+After 0006 and 0007 that queue is **32 rows**, down from 53. `Dairy Queen`
+(`ice-cream`) versus `DQ Grill & Chill` (`burgers`) is the one most worth a
+second opinion; the brand is genuinely split and the map currently disagrees
+with itself on purpose. The rest are `Taco Bell` as `tacos` vs `fast-food`,
+`Chili's` as `tex-mex`, and generic names like `Country Cafe` that may be
+several unrelated places sharing a name.
+
+**Turn the pager off** when reviewing these — `psql -P pager=off`, or
+`--csv` to a file. The default pager redraws the whole table on every scroll.
 
 A cross-check against Overture's own categories agrees almost everywhere
 (`deli-sandwiches` ↔ `sandwich_shop` 794 rows, `burgers` ↔
@@ -120,10 +130,10 @@ None of these block the mapping work, but they all make a demo look broken:
   Llc`. A mix of real restaurants filed under their LLC name — which display
   terribly on a shortlist card — and genuine non-restaurants like
   `Xalka Healthcare Solutions, Llc`.
-- **Delivery-only virtual brands** are in the catalog as places: `Barstool
-  Bites`, `The Burger Den`, `Tenderfix by Noah Schnapp`, `Pardon My
-  Cheesesteak`, `The Meltdown`. You cannot go to them. Whether they belong in
-  a "where should we go" app is a product decision, flagged in 0005's notes.
+- **Delivery-only virtual brands** — resolved in 0007. Flagged, not dropped.
+  Promote must carry `delivery_only` onto `places`, and **a delivery-only
+  place must never be a Surprise Me pick** — that affordance means "go here
+  now".
 - **Vending machines as places** — `Coca-Cola Freestyle` (5) and `Coca-Cola`
   (3) are mapped as food-and-drink POIs. Left unmapped deliberately.
 - **~90 places have non-Latin names** (Japanese, Thai, Korean) that normalize
