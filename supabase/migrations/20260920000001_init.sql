@@ -216,7 +216,74 @@ create index google_api_usage_user_day_idx
   on google_api_usage (user_id, called_at desc);
 
 -- ===========================================================================
--- RLS — Layer 3 only. The catalog is public read.
+-- HELPERS
+-- SECURITY DEFINER so household checks don't recurse: household_members is
+-- itself RLS-protected, and a policy that queries it would re-enter its own
+-- policy without this.
+-- ===========================================================================
+
+create function is_household_member(h uuid)
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (
+    select 1 from household_members
+    where household_id = h and user_id = auth.uid()
+  );
+$$;
+
+create function is_household_owner(h uuid)
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (
+    select 1 from household_members
+    where household_id = h and user_id = auth.uid() and role = 'owner'
+  );
+$$;
+
+-- Creating a household and its first membership must be atomic, and it cannot
+-- go through ordinary policies: at insert time the creator is not yet a member,
+-- so an owner check would fail against a household that does not exist yet.
+create function create_household(p_name text)
+returns uuid language plpgsql security definer set search_path = public as $$
+declare
+  new_id uuid;
+begin
+  if auth.uid() is null then
+    raise exception 'not authenticated';
+  end if;
+
+  insert into households (name, created_by)
+  values (p_name, auth.uid())
+  returning id into new_id;
+
+  insert into household_members (household_id, user_id, role)
+  values (new_id, auth.uid(), 'owner');
+
+  return new_id;
+end;
+$$;
+
+-- Every authenticated user needs a profiles row, because households.created_by
+-- and every Layer 3 table reference it. Creating it on signup avoids a whole
+-- class of "profile does not exist yet" failures on first launch.
+create function handle_new_user()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  insert into public.profiles (id, display_name)
+  values (new.id, new.raw_user_meta_data ->> 'display_name')
+  on conflict (id) do nothing;
+  return new;
+end;
+$$;
+
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute function handle_new_user();
+
+-- ===========================================================================
+-- RLS
+--
+-- Supabase exposes every table through PostgREST, so a table WITHOUT RLS
+-- enabled is readable by anyone holding the anon key. Enabling RLS with no
+-- policies is therefore the correct way to make a table service-role only.
 -- ===========================================================================
 
 alter table profiles           enable row level security;
@@ -231,12 +298,15 @@ alter table meals              enable row level security;
 alter table meal_candidates    enable row level security;
 alter table meal_votes         enable row level security;
 
--- Catalog is readable by any authenticated user; writes are service-role only
--- (the ingest pipeline).
+-- Catalog: readable by any authenticated user, written only by the ingest
+-- pipeline running as service role.
 alter table places               enable row level security;
 alter table cuisines             enable row level security;
 alter table place_cuisines       enable row level security;
 alter table category_cuisine_map enable row level security;
+
+-- Cost-control ledger: service role only. No policies by design.
+alter table google_api_usage enable row level security;
 
 create policy places_read on places
   for select to authenticated using (true);
@@ -259,21 +329,24 @@ create policy place_vetoes_self on place_vetoes
 create policy place_impressions_self on place_impressions
   for all to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid());
 
--- Household-scoped access. SECURITY DEFINER avoids recursive RLS evaluation
--- when household_members is itself the table being filtered.
-create function is_household_member(h uuid)
-returns boolean language sql stable security definer set search_path = public as $$
-  select exists (
-    select 1 from household_members
-    where household_id = h and user_id = auth.uid()
-  );
-$$;
-
-create policy households_member on households
+-- Households are created through create_household(), so there is deliberately
+-- no direct INSERT policy here.
+create policy households_read on households
   for select to authenticated using (is_household_member(id));
 
-create policy household_members_member on household_members
+create policy households_owner_write on households
+  for update to authenticated
+  using (is_household_owner(id)) with check (is_household_owner(id));
+
+create policy household_members_read on household_members
   for select to authenticated using (is_household_member(household_id));
+
+create policy household_members_owner_add on household_members
+  for insert to authenticated with check (is_household_owner(household_id));
+
+create policy household_members_remove on household_members
+  for delete to authenticated
+  using (is_household_owner(household_id) or user_id = auth.uid());
 
 create policy visits_member on visits
   for all to authenticated
