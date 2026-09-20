@@ -51,11 +51,14 @@ about nine seconds.
   and moves 16 brands onto it (974 places). Decided 2026-09-20: one leaf, not
   a fried/rotisserie split, because Overture gives only `chicken_restaurant`
   and there is no signal to split on.
-- **0007 delivery-only brands** — written, **not yet applied**. Flags the 9
-  ghost-kitchen brands (145 places) rather than dropping them. Decided
-  2026-09-20: keep and flag. They are real answers to "what can we order
-  tonight" and wrong answers to "where should we go", so the flag keeps both
-  futures open where dropping at ingest would not.
+- **0007 delivery-only brands** — applied. Flags the 9 ghost-kitchen brands
+  (145 places) rather than dropping them. Decided 2026-09-20: keep and flag.
+  They are real answers to "what can we order tonight" and wrong answers to
+  "where should we go", so the flag keeps both futures open where dropping at
+  ingest would not.
+- **0008 category cuisine map** — written, **not yet applied**. All 182
+  Overture categories mapped, with an assertion that exactly 16 resolve to no
+  cuisine. **Combined cuisine coverage: 88.6%** (35,310 of 39,852).
 
 ### Connecting to Supabase from this machine
 
@@ -68,48 +71,49 @@ is not needed; the shared pooler is already IPv4.
 
 ## Next
 
-**1. Audit the brand map (0005), then apply it.** Every row is
-`reviewed = false` on purpose — these are proposed mappings, not reviewed
-ones, and the spec requires a human pass before the mapping is applied.
-Sort by `confidence` and argue with anything under 0.8:
+**Promote: `overture_staging` → `places`.** This is the last step to the Phase
+0 exit criteria. Everything it needs now exists.
 
-```sql
-select b.name_norm, c.slug, b.confidence, b.note
-from brand_cuisine_map b join cuisines c on c.id = b.cuisine_id
-where b.confidence < 0.8 order by b.confidence;
-```
+What promote must do:
 
-After 0006 and 0007 that queue is **32 rows**, down from 53. `Dairy Queen`
-(`ice-cream`) versus `DQ Grill & Chill` (`burgers`) is the one most worth a
-second opinion; the brand is genuinely split and the map currently disagrees
-with itself on purpose. The rest are `Taco Bell` as `tacos` vs `fast-food`,
-`Chili's` as `tex-mex`, and generic names like `Country Cafe` that may be
-several unrelated places sharing a name.
+1. Resolve cuisine as
+   `coalesce(brand_cuisine_map.cuisine_id, category_cuisine_map.cuisine_id)`.
+   **Brand wins — this matters.** The two disagree on 3,414 rows and the brand
+   is more specific in essentially every case (`fast-food` → `burgers` on
+   1,222 rows, `fast-food` → `chicken` on 627, `chicken` → `wings` on 129).
+   Category-first would file McDonald's under generic fast food and nobody
+   browsing burgers would find it. The full table is in 0008's trailing
+   comment.
+2. Exclude `operating_status = 'permanently_closed'` (548 rows).
+3. Carry `delivery_only` onto `places`, which needs a column adding.
+4. Build `location` as `geography(point, 4326)` from lon/lat and create the
+   GiST index. **This is the thing the 200ms target depends on** — without the
+   index the radius query degrades to a sequential scan over 40k rows.
+5. Set `source = 'overture'`, `source_id`, and `source_categories`.
 
-**Turn the pager off** when reviewing these — `psql -P pager=off`, or
-`--csv` to a file. The default pager redraws the whole table on every scroll.
+Then time it. `explain analyze` on a radius + cuisine query is the Phase 0
+exit criteria, and it is the first moment Elsewhere does something.
 
-A cross-check against Overture's own categories agrees almost everywhere
-(`deli-sandwiches` ↔ `sandwich_shop` 794 rows, `burgers` ↔
-`burger_restaurant` 325, `wings` ↔ `chicken_wings_restaurant` 68), which is
-reassuring but not a substitute for reading the low-confidence ones.
+**After that, the Claude name pass** over the ~4,200 places still without a
+cuisine — almost all of them `restaurant` (4,236 rows), where the category
+genuinely says nothing and there is no chain name to match. Names carry the
+signal. This is an enhancement, not a blocker: it moves coverage from 88.6%
+toward the mid-90s.
 
-**2. Hot dogs are the remaining taxonomy gap.** Small — Wienerschnitzel has
-nowhere sensible to go and sits on `fast-food` at 0.60. Decide whether it is
-worth a leaf. (Chicken was the big one and is handled in 0006.)
+### Audit queue, when there is time
 
-**3. Build `category_cuisine_map` for the 182 Overture categories.** Most are
-already cuisine-shaped (`mexican_restaurant`, `texmex_restaurant`,
-`italian_restaurant`) and map by reviewed rename. This is the two-thirds of
-the catalog the brand map does not touch.
+Nothing here blocks promote. `reviewed = false` on every row of both maps.
 
-**4. The Claude name pass** over the ~8,100 unique independent names — the
-remaining 62% of the no-cuisine gap. Names carry the signal (*Angels NY
-Pizza*, *Elizandro's Mexican Food*, *Ponder Coffee Company*), so this is the
-offline pass the spec calls for, just keyed on names rather than categories.
-
-**5. Promote** `overture_staging` → `places`, excluding
-`operating_status = 'permanently_closed'`.
+- `brand_cuisine_map`: 32 rows below 0.8. Dairy Queen vs DQ Grill & Chill is
+  the one worth a second opinion — the map disagrees with itself on purpose.
+- `category_cuisine_map`: the coarse fallbacks, where our taxonomy is thinner
+  than Overture's. `salvadoran_restaurant` (105 rows), `honduran_restaurant`
+  (36) and `venezuelan_restaurant` (27) all land on `latin-american`; the note
+  column records what was lost so it can be recovered if leaves are added.
+- **Taxonomy gaps still open:** no plain **American** leaf (943 rows on
+  `american_restaurant` → `new-american` at 0.65), no **hot dog** leaf (53
+  rows plus Wienerschnitzel), no generic **African** leaf (46 rows unmapped),
+  no **kosher** leaf. Chicken was the big one and is closed.
 
 ### Things that will not work, already checked
 
