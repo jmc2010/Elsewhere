@@ -16,3 +16,14 @@ jobs:
           python-version: '3.12'
       - name: Assert no Google Places content is persisted
         run: python3 scripts/check-no-google-persistence.py
+
+  edge-functions:
+    name: Edge function typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Typecheck
+        run: deno check supabase/functions/**/*.ts

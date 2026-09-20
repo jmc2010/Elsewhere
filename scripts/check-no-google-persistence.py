@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Fail if a migration adds a column that would persist Google Places content.
+"""Fail if Google Places content could be persisted.
+
+Two checks, because there are two ways to break the rule.
 
 Storing Google Places content beyond `place_id` (indefinite) and coordinates
 (30 days) violates the Google Maps Platform Terms. The `places` catalog table
@@ -21,7 +23,21 @@ FORBIDDEN = {
     "formatted_address", "google_name", "google_rating",
 }
 
-MIGRATIONS = pathlib.Path(__file__).resolve().parent.parent / "supabase" / "migrations"
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+MIGRATIONS = ROOT / "supabase" / "migrations"
+FUNCTIONS = ROOT / "supabase" / "functions"
+
+# Supabase client calls that reach the database. A Google-derived value
+# appearing inside any of these is the violation.
+DB_WRITE = re.compile(r"\.(insert|update|upsert|rpc)\s*\(")
+
+# The response envelope. places-proxy holds Google values in `live`; passing
+# that variable into a database call is the mistake this check exists for,
+# and it would not be caught by looking for field names alone.
+ENVELOPE = re.compile(r"\blive\b")
+
+# The only two Google values that may be written, each with one writer.
+PERMITTED_RPC = {"google_place_id_record", "google_business_status_record"}
 
 CREATE_PLACES = re.compile(
     r"create\s+table\s+(?:if\s+not\s+exists\s+)?places\s*\((.*?)\n\);",
@@ -47,6 +63,52 @@ def column_names(block: str):
             yield m.group(1)
 
 
+def balanced_args(text: str, open_paren: int) -> str:
+    """Return the argument text of a call whose '(' is at open_paren."""
+    depth, i = 0, open_paren
+    while i < len(text):
+        if text[i] == "(":
+            depth += 1
+        elif text[i] == ")":
+            depth -= 1
+            if depth == 0:
+                return text[open_paren + 1:i]
+        i += 1
+    return text[open_paren + 1:]
+
+
+def check_edge_functions() -> list[str]:
+    """Google content must never reach a database call from function code."""
+    failures = []
+    if not FUNCTIONS.exists():
+        return failures
+    for path in sorted(FUNCTIONS.rglob("*.ts")):
+        src = path.read_text()
+        # Strip line comments so the explanatory prose above each rule -- which
+        # necessarily names the forbidden fields -- does not trip the check.
+        code = re.sub(r"//[^\n]*", "", src)
+        for m in DB_WRITE.finditer(code):
+            args = balanced_args(code, m.end() - 1)
+            rel = path.relative_to(ROOT)
+
+            if m.group(1) == "rpc":
+                name = re.match(r"\s*[\"']([\w.]+)[\"']", args)
+                # A permitted writer takes place_id or a boolean and nothing
+                # else; its own signature is the guarantee.
+                if name and name.group(1) in PERMITTED_RPC:
+                    continue
+
+            for field in FORBIDDEN:
+                if re.search(rf"\b{re.escape(field)}\b\s*:", args):
+                    failures.append(f"{rel}: {field} passed to .{m.group(1)}()")
+            if ENVELOPE.search(args):
+                failures.append(
+                    f"{rel}: the `live` response envelope passed to "
+                    f".{m.group(1)}() -- it holds Google content and has no "
+                    f"database writer")
+    return failures
+
+
 def main() -> int:
     failures = []
     for path in sorted(MIGRATIONS.glob("*.sql")):
@@ -61,8 +123,10 @@ def main() -> int:
             if col.lower() in FORBIDDEN:
                 failures.append(f"{path.name}: places.{col} (added via ALTER)")
 
+    failures.extend(check_edge_functions())
+
     if failures:
-        print("Google Places content may not be persisted. Offending columns:\n")
+        print("Google Places content may not be persisted. Offending code:\n")
         for f in failures:
             print(f"  - {f}")
         print(
@@ -72,7 +136,8 @@ def main() -> int:
         )
         return 1
 
-    print("OK: no Google Places content persisted in the catalog schema.")
+    print("OK: no Google Places content persisted in the catalog schema,")
+    print("    and no Google-derived value reaches a database call.")
     return 0
 
 

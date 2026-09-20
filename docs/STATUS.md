@@ -70,8 +70,14 @@ about nine seconds.
   [`docs/measurements.md`](measurements.md).
 - **0010 catalog_search** — applied. Layer 1 + Layer 3 narrowing,
   spatial-first, no Google calls.
-- **0011 radius guard** — written, **not yet applied**. Clamps radius to 100
-  miles and validates coordinates.
+- **0011 radius guard** — applied. Clamps radius to 100 miles and validates
+  coordinates.
+- **0012 google quota** — written, **not yet applied**. Per-user daily call
+  limit, `session_id` on `google_api_usage`, the two permitted Google writers,
+  and `places_coords` for the proxy. All revoked from `public`/`authenticated`
+  and granted only to `service_role`.
+- **`places-proxy` edge function** — written, typechecks, **not yet
+  deployed**. The only path to Google. Untested against the live API.
 
 ### Decided 2026-09-20: catalog_search is called as an RPC, not an edge function
 
@@ -112,35 +118,45 @@ is not needed; the shared pooler is already IPv4.
 
 ## Next
 
-**Phase 1 — Shortlist.** Exit criteria: a real "where to eat" query returns 10
-good cards under budget.
+**Deploy and exercise `places-proxy`.** Written and typechecked; nothing has
+called it against the live Places API.
 
-The catalog is live and queryable, so the next pieces are the ones that turn
-it into a product:
+```bash
+psql "$ELSEWHERE_PG_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/20260920000012_google_quota.sql
+supabase secrets set GOOGLE_MAPS_API_KEY=...
+supabase functions deploy places-proxy
+```
 
-1. **Apply and verify `catalog_search` (0010) on Supabase.** Written and
-   tested locally; the Micro-instance timings still need confirming, since
-   local numbers say nothing about your instance.
+Then hydrate a real shortlist from `catalog_search` and check three things:
 
-   **Still open: transport.** The spec lists `catalog-search` as an edge
-   function, but it touches no secrets, so calling the Postgres function
-   directly as an RPC from `supabase-js` would save a network hop inside a
-   90-second decision window. The function is the right primitive either way.
-   Decide before the Expo work, not after.
-2. **Google Cloud project + Places key.** Server-side only, never in the
-   bundle.
-3. **`places-proxy` edge function.** The only path to Google. Quota, batching,
-   and the response envelope with no database writer. Instrument
-   calls-per-session from the first call, not after.
-4. **Expo app scaffold**, filter sheet, shortlist UI, place detail.
+1. `quota.used_today` climbs by the expected amount — 2 calls for a place
+   needing resolution, 1 for one already resolved.
+2. `google_calls_per_session()` reports that session. If it does not, the
+   metric the spec says to alert on is not working, and it is much easier to
+   fix now than after launch.
+3. `live_status` distribution roughly matches the spike's ~73% — if `ok` is
+   far below that, something in the resolution path differs from the spike.
 
-**Run `analyze` after every promote.** It took planning time from 52ms to
-1.3ms and costs nothing.
+**Then the app.** Expo scaffold, `catalog_search` over RPC, filter sheet,
+shortlist, place detail. Phase 1's exit criteria is a real "where to eat"
+query returning 10 good cards under budget.
 
-**The Claude name pass** is still open and still an enhancement rather than a
-blocker: ~4,200 places with no cuisine, almost all categorised `restaurant`,
-where neither the category nor a chain name says anything. Names carry the
-signal. It moves coverage from 88.6% toward the mid-90s.
+### Two product questions that now have numbers behind them
+
+- **About one card in four will have no rating, price or open-now.** Does an
+  unresolved place rank lower, get a distinct treatment, or drop out of the
+  shortlist? Dropping it would quietly reduce Elsewhere to "places Google
+  knows well", which is the opposite of the thesis.
+- **The daily quota is 60 calls.** That is roughly two full sessions, chosen
+  as a runaway guard rather than a product limit. Revisit it against real
+  calls-per-session data rather than by guessing a second time.
+
+### Known follow-up: duplicate catalog rows
+
+`google_place_id_record()` flags the loser when two catalog rows resolve to
+the same Google place, because `places.google_place_id` is unique. Those are
+Overture duplicates of one restaurant and should be merged rather than
+flagged. Needs a dedupe pass; the flag keeps hydration working meanwhile.
 
 ### Audit queue, when there is time
 
