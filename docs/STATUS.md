@@ -36,40 +36,61 @@ about nine seconds.
   published EPSG definitions, and cannot be altered. Expect it as a permanent
   Supabase Security Advisor warning.)
 - **0002 cuisines** — applied. 15 groups, 93 leaves.
-- **0003 staging** — written; confirm it is applied before the extract.
-- **0004 staging taxonomy** — written, not yet applied. Adds
-  `category_hierarchy`, `basic_category`, `operating_status` to
-  `overture_staging`. Apply it together with 0003.
-- **`extract_overture.sh` — corrected and verified end-to-end.** Run against
-  live Overture S3 and a throwaway local Postgres 16: 39,852 rows, 8.8s,
-  idempotent on re-run. It has **not** been run against Supabase — see Next.
+- **0003 staging** — applied. It had never been applied before 2026-09-20;
+  the standing "confirm it is applied" note is now resolved.
+- **0004 staging taxonomy** — applied. Adds `category_hierarchy`,
+  `basic_category`, `operating_status` to `overture_staging`.
+- **`extract_overture.sh` — corrected, and run against Supabase.** North Texas
+  (`-97.9 32.3 -96.1 33.75`) landed **39,852 rows** in `overture_staging`:
+  32,770 `open`, 6,534 null, 548 `permanently_closed`. Matched the local
+  dry-run exactly. Idempotent — re-running rebuilds the box.
+
+### Connecting to Supabase from this machine
+
+Use the **Session pooler** string (`…pooler.supabase.com:5432`), not the
+direct connection. `db.oygsbuailwpjgkqbxllp.supabase.co` resolves **AAAA
+only**, and the developer's network has no IPv6 egress, so the direct string
+fails with no useful error. The transaction pooler (6543) also will not work
+— DuckDB's bulk insert needs session-mode transactions. The paid IPv4 add-on
+is not needed; the shared pooler is already IPv4.
 
 ## Next
 
-**Run the extract against Supabase.**
+**Build the category → cuisine mapping, then promote.** This is the last thing
+standing between here and the Phase 0 exit criteria — `places` is still empty;
+everything so far is in `overture_staging`.
 
-```bash
-export ELSEWHERE_PG_URL='...'          # from the Supabase dashboard
-scripts/ingest/extract_overture.sh -97.9 32.3 -96.1 33.75
+Start by looking at what actually landed:
+
+```sql
+select primary_category, count(*)
+from overture_staging
+group by 1 order by 2 desc;
 ```
 
-Apply 0003 and 0004 first. Expect ~39,850 rows and roughly:
+182 distinct categories over four branches — `restaurant` (120 leaves),
+`casual_eatery` (27), `alcoholic_beverage_venue` (26),
+`non_alcoholic_beverage_venue` (8). The spec calls this the hardest data
+problem in the project, and it is still the step to be careful about, but it
+is easier than the spec assumed — **re-scope it before starting** (see below).
 
-| | |
-|---|---|
-| `open` | 32,770 |
-| `NULL` | 6,534 |
-| `permanently_closed` | 548 |
+The shape of the work:
 
-The only untested surface left is the network path to Supabase — schema,
-query, and the DuckDB→Postgres write are all verified.
+1. Most leaves are already cuisine-shaped (`mexican_restaurant`,
+   `texmex_restaurant`, `italian_restaurant`, `barbecue_restaurant`) and map
+   to the 93 seeded cuisine leaves by reviewed rename.
+2. The real problem is the leaves that carry no cuisine at all —
+   `restaurant` (4,602 rows), `fast_food_restaurant` (3,249),
+   `casual_eatery`. Together that is a large fraction of the catalog with no
+   filterable cuisine, and it needs a different signal: brand/name matching,
+   `alternate_categories`, or a Claude pass over names.
+3. Hand-audit the result for North Texas. The developer lives in the box, so
+   bad mappings should be visible by eye.
 
-**Then: build the category → cuisine mapping.** 182 distinct categories over
-four branches (`restaurant` 120 leaves, `casual_eatery` 27,
-`alcoholic_beverage_venue` 26, `non_alcoholic_beverage_venue` 8). The spec
-calls this the hardest data problem in the project and it is still the step to
-be careful about, but it is easier than the spec assumed — see below. Hand-
-audit it for this metro.
+Then write the promote step: `overture_staging` → `places`, **excluding
+`operating_status = 'permanently_closed'`** (548 rows). Every closed place
+that reaches the catalog is a wasted Google hydration call against a
+restaurant that no longer exists.
 
 ## What changed in Overture, and why it matters
 
