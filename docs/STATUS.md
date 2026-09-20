@@ -4,8 +4,9 @@ Living handoff between working sessions. Update it when something lands.
 Read `CLAUDE.md` for the rules and `docs/spec.md` for the reasoning — this
 file only covers **where we are right now**.
 
-**Phase 0 — Foundation.** Exit criteria: catalog queryable by radius +
-cuisine in under 200ms.
+**Phase 0 — Foundation. COMPLETE, 2026-09-20.** Exit criteria was catalog
+queryable by radius + cuisine in under 200ms; measured at **54ms** on Micro.
+See [`docs/measurements.md`](measurements.md). Next phase is 1 — Shortlist.
 
 ## Environment
 
@@ -56,9 +57,17 @@ about nine seconds.
   They are real answers to "what can we order tonight" and wrong answers to
   "where should we go", so the flag keeps both futures open where dropping at
   ingest would not.
-- **0008 category cuisine map** — written, **not yet applied**. All 182
-  Overture categories mapped, with an assertion that exactly 16 resolve to no
-  cuisine. **Combined cuisine coverage: 88.6%** (35,310 of 39,852).
+- **0008 category cuisine map** — applied. All 182 Overture categories
+  mapped, with an assertion that exactly 16 resolve to no cuisine. **Combined
+  cuisine coverage: 88.6%** (35,310 of 39,852).
+- **0009 promote** — applied, and run. `promote_overture_staging()` is a
+  re-runnable function, not a one-shot, because the spec calls for monthly
+  reingest. **39,304 places and 34,910 cuisine links in `places`**; 548
+  Overture-flagged closed rows skipped. Preserves `google_place_id` and
+  `places.permanently_closed` across re-runs.
+- **Phase 0 exit criteria met.** Italian within 20 miles of Valley View
+  returns 17 places in 54ms. Numbers and query shapes in
+  [`docs/measurements.md`](measurements.md).
 
 ### Connecting to Supabase from this machine
 
@@ -71,34 +80,31 @@ is not needed; the shared pooler is already IPv4.
 
 ## Next
 
-**Promote: `overture_staging` → `places`.** This is the last step to the Phase
-0 exit criteria. Everything it needs now exists.
+**Phase 1 — Shortlist.** Exit criteria: a real "where to eat" query returns 10
+good cards under budget.
 
-What promote must do:
+The catalog is live and queryable, so the next pieces are the ones that turn
+it into a product:
 
-1. Resolve cuisine as
-   `coalesce(brand_cuisine_map.cuisine_id, category_cuisine_map.cuisine_id)`.
-   **Brand wins — this matters.** The two disagree on 3,414 rows and the brand
-   is more specific in essentially every case (`fast-food` → `burgers` on
-   1,222 rows, `fast-food` → `chicken` on 627, `chicken` → `wings` on 129).
-   Category-first would file McDonald's under generic fast food and nobody
-   browsing burgers would find it. The full table is in 0008's trailing
-   comment.
-2. Exclude `operating_status = 'permanently_closed'` (548 rows).
-3. Carry `delivery_only` onto `places`, which needs a column adding.
-4. Build `location` as `geography(point, 4326)` from lon/lat and create the
-   GiST index. **This is the thing the 200ms target depends on** — without the
-   index the radius query degrades to a sequential scan over 40k rows.
-5. Set `source = 'overture'`, `source_id`, and `source_categories`.
+1. **`catalog-search` edge function.** PostGIS radius + cuisine over Layer 1,
+   joined against Layer 3 for vetoes and recency. **Build it spatial-first**
+   and resolve the cuisine slug to an id once — both decisions are measured
+   and argued in [`docs/measurements.md`](measurements.md). Do not let the
+   planner choose as the catalog grows; its spatial estimate is off by 500×.
+2. **Google Cloud project + Places key.** Server-side only, never in the
+   bundle.
+3. **`places-proxy` edge function.** The only path to Google. Quota, batching,
+   and the response envelope with no database writer. Instrument
+   calls-per-session from the first call, not after.
+4. **Expo app scaffold**, filter sheet, shortlist UI, place detail.
 
-Then time it. `explain analyze` on a radius + cuisine query is the Phase 0
-exit criteria, and it is the first moment Elsewhere does something.
+**Run `analyze` after every promote.** It took planning time from 52ms to
+1.3ms and costs nothing.
 
-**After that, the Claude name pass** over the ~4,200 places still without a
-cuisine — almost all of them `restaurant` (4,236 rows), where the category
-genuinely says nothing and there is no chain name to match. Names carry the
-signal. This is an enhancement, not a blocker: it moves coverage from 88.6%
-toward the mid-90s.
+**The Claude name pass** is still open and still an enhancement rather than a
+blocker: ~4,200 places with no cuisine, almost all categorised `restaurant`,
+where neither the category nor a chain name says anything. Names carry the
+signal. It moves coverage from 88.6% toward the mid-90s.
 
 ### Audit queue, when there is time
 
