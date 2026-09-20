@@ -37,6 +37,13 @@ interface CatalogPlace {
 const MILES = 1609.344;
 const DEFAULT_RADIUS_MI = 20;
 
+// The hydration candidate pool, not the list a user should scroll. Spec §5.1:
+// Layer 1 + Layer 3 narrow to ~25, places-proxy hydrates those, Layer 2
+// filters (rating, price, open now) cut it to the ~10 that get rendered.
+// Until places-proxy is wired in there is nothing to filter with, so this
+// screen shows the pool -- and says so, rather than implying it is the total.
+const CANDIDATE_POOL = 25;
+
 type Permission = "unknown" | "explaining" | "granted" | "denied";
 
 export default function Home() {
@@ -88,7 +95,7 @@ export default function Home() {
         p_lat: coords!.lat,
         p_lon: coords!.lon,
         p_radius_meters: DEFAULT_RADIUS_MI * MILES,
-        p_limit: 25,
+        p_limit: CANDIDATE_POOL,
       });
       if (error) throw error;
       return (data ?? []) as CatalogPlace[];
@@ -150,7 +157,9 @@ export default function Home() {
       <View style={styles.header}>
         <Text style={styles.title}>Where to tonight?</Text>
         <Text style={styles.bodyQuiet}>
-          {data.length} places within {DEFAULT_RADIUS_MI} miles
+          {data.length === CANDIDATE_POOL
+            ? `Nearest ${CANDIDATE_POOL} of many within ${DEFAULT_RADIUS_MI} miles`
+            : `${data.length} places within ${DEFAULT_RADIUS_MI} miles`}
         </Text>
       </View>
       <FlatList

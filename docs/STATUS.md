@@ -79,8 +79,11 @@ about nine seconds.
 - **`places-proxy` edge function** — written, typechecks, **not yet
   deployed**. The only path to Google. Untested against the live API.
 - **Expo app scaffold** — SDK 57, RN 0.86, React 19, expo-router, TypeScript
-  strict. Home screen does location → `catalog_search` RPC → list. iOS bundle
-  builds clean. **Never run against a device.**
+  strict. iOS (3.3MB) and Android (3.6MB) bundles both build.
+- **Running on a real device, 2026-09-20.** Home screen returns the nearest 25
+  places within 20 miles of Valley View over Expo Go. The Phase 1 spine works
+  end to end: location → anonymous session → `catalog_search` RPC → PostGIS →
+  cuisine-mapped catalog. No Google call anywhere in that path.
 
 ### Decided 2026-09-20: catalog_search is called as an RPC, not an edge function
 
