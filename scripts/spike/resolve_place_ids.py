@@ -49,6 +49,22 @@ RURAL = ("Valley View", "Sanger", "Krum", "Collinsville", "Pilot Point",
          "Gainesville", "Aubrey", "Ponder", "Muenster", "Era")
 URBAN = ("Dallas", "Fort Worth", "Plano", "Arlington", "Denton", "Frisco")
 
+# Distance and name are NOT co-equal evidence, and treating them as such was
+# wrong in the first run. At a few metres there is no other building, so the
+# coordinates settle it and a name disagreement just means the two sources
+# disagree about the trading name -- "Bayer's Kolonialwaren" vs "Bayers
+# Bakery" in Muenster, 5m apart, is one shop.
+#
+# Further out the reverse holds: "Tortilleria Mexico" resolved to "Ibarra's
+# Tortilleria" 830m away with half its tokens shared. Same kind of business,
+# different business. That is the dangerous case, because the wrong place_id
+# would be stored permanently and silently.
+# Hard search bound. Generous enough to absorb the coordinate disagreement
+# between Overture and Google, tight enough that another branch of the same
+# chain cannot be inside it.
+RESTRICT_M = 2000.0
+
+SAME_BUILDING_M  = 30.0    # coordinates alone settle it
 MATCH_DISTANCE_M = 250.0   # beyond this it is a different building
 MATCH_NAME_RATIO = 0.55    # token overlap, see name_similarity
 
@@ -101,6 +117,18 @@ def name_similarity(a: str, b: str) -> float:
     return len(ta & tb) / min(len(ta), len(tb))
 
 
+def bounding_rect(lat: float, lon: float, metres: float) -> dict:
+    dlat = metres / 111_320.0
+    dlon = metres / (111_320.0 * max(math.cos(math.radians(lat)), 0.01))
+    return {"rectangle": {
+        "low":  {"latitude": lat - dlat, "longitude": lon - dlon},
+        "high": {"latitude": lat + dlat, "longitude": lon + dlon},
+    }}
+
+
+DEBUG = False
+
+
 def text_search(key: str, place: dict, timeout: float = 10.0) -> dict | None:
     query = place["name"]
     if place["locality"]:
@@ -108,11 +136,21 @@ def text_search(key: str, place: dict, timeout: float = 10.0) -> dict | None:
     body = json.dumps({
         "textQuery": query,
         "maxResultCount": 1,
-        "locationBias": {"circle": {
-            "center": {"latitude": place["lat"], "longitude": place["lon"]},
-            "radius": 2000.0,
-        }},
+        # locationRESTRICTION, not locationBias. The first run used a 2km
+        # bias circle and Google returned a result 60km outside it -- bias is
+        # a hint it is free to ignore when it finds a better text match
+        # elsewhere. That produced five wrong-branch chain matches (Subway
+        # twice, Dickey's, The Original Fried Pie Shop) at 2.4km to 14km, each
+        # of which would have bound a real restaurant to another location's
+        # place_id permanently and silently.
+        #
+        # A restriction can only return nothing, which is the failure we can
+        # actually handle: flag it and fall back to catalog-only display.
+        "locationRestriction": bounding_rect(place["lat"], place["lon"], RESTRICT_M),
     }).encode()
+    if DEBUG:
+        print("\n--- REQUEST ---")
+        print(json.dumps(json.loads(body), indent=2))
     req = urllib.request.Request(ENDPOINT, data=body, method="POST", headers={
         "Content-Type": "application/json",
         "X-Goog-Api-Key": key,
@@ -126,6 +164,9 @@ def text_search(key: str, place: dict, timeout: float = 10.0) -> dict | None:
         return {"_error": f"HTTP {e.code}: {detail}"}
     except Exception as e:                                  # noqa: BLE001
         return {"_error": f"{type(e).__name__}: {e}"}
+    if DEBUG:
+        print("--- RESPONSE ---")
+        print(json.dumps(payload, indent=2))
     hits = payload.get("places") or []
     return hits[0] if hits else None
 
@@ -141,6 +182,10 @@ def classify(place: dict, hit: dict | None) -> tuple[str, str]:
     gname = (hit.get("displayName") or {}).get("text", "")
     sim = name_similarity(place["name"], gname)
     detail = f"{dist:6.0f}m  name~{sim:.2f}  → {gname}"
+    if dist <= SAME_BUILDING_M:
+        # Same building. Report the name divergence so it can be eyeballed,
+        # but this is a resolution, not a failure.
+        return ("match" if sim >= MATCH_NAME_RATIO else "match_name_differs"), detail
     if dist <= MATCH_DISTANCE_M and sim >= MATCH_NAME_RATIO:
         return "match", detail
     if dist <= MATCH_DISTANCE_M:
@@ -155,6 +200,10 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--rural", type=int, default=20)
     ap.add_argument("--urban", type=int, default=10)
+    ap.add_argument("--only", metavar="SUBSTR",
+                    help="restrict the sample to places whose name contains this")
+    ap.add_argument("--debug", action="store_true",
+                    help="dump the raw request and response for each call")
     ap.add_argument("--dry-run", action="store_true",
                     help="list the calls that would be made; spend nothing")
     args = ap.parse_args()
@@ -174,8 +223,15 @@ def main() -> int:
         print("set GOOGLE_MAPS_API_KEY (or pass --dry-run)", file=sys.stderr)
         return 2
 
+    global DEBUG
+    DEBUG = args.debug
+
     buckets = [("rural", sample(pg, RURAL, args.rural)),
                ("urban", sample(pg, URBAN, args.urban))]
+    if args.only:
+        needle = args.only.lower()
+        buckets = [(lbl, [p for p in ps if needle in p["name"].lower()])
+                   for lbl, ps in buckets]
 
     if args.dry_run:
         for label, places in buckets:
@@ -197,7 +253,7 @@ def main() -> int:
             overall[verdict] = overall.get(verdict, 0) + 1
             flag = " " if verdict == "match" else "!"
             print(f" {flag} {verdict:26} {p['name'][:34]:34} {detail}")
-        hits = counts.get("match", 0)
+        hits = counts.get("match", 0) + counts.get("match_name_differs", 0)
         print(f" --> {label} hit rate: {hits}/{len(places)} "
               f"({100.0 * hits / max(len(places), 1):.0f}%)")
 
@@ -205,7 +261,7 @@ def main() -> int:
     print("\n" + "=" * 60)
     for k, v in sorted(overall.items(), key=lambda kv: -kv[1]):
         print(f"  {k:28} {v:4}  ({100.0 * v / max(n, 1):.0f}%)")
-    hit = overall.get("match", 0)
+    hit = overall.get("match", 0) + overall.get("match_name_differs", 0)
     print(f"\nOVERALL RESOLUTION RATE: {hit}/{n} "
           f"({100.0 * hit / max(n, 1):.0f}%)")
     print("\nspec §4 assumes this is high enough that unresolvable places are a")
