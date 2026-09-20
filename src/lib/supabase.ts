@@ -13,16 +13,29 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { createClient } from "@supabase/supabase-js";
 
 const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
-const anonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
 
-if (!url || !anonKey) {
+// Supabase renamed the client-side key: the dashboard now issues a
+// "publishable key" (sb_publishable_...) in place of the older "anon key"
+// (a JWT beginning eyJ...). Both are accepted by supabase-js and both are
+// safe to ship, because neither grants anything RLS would not.
+//
+// Either variable name works, so a .env written against the old naming keeps
+// running. The new name is preferred because it matches what the dashboard
+// actually calls it, which is where the value is copied from.
+const publishableKey = process.env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY ??
+  process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+
+if (!url || !publishableKey) {
   throw new Error(
-    "Missing EXPO_PUBLIC_SUPABASE_URL or EXPO_PUBLIC_SUPABASE_ANON_KEY. " +
-      "Copy .env.example to .env and fill them in.",
+    "Missing EXPO_PUBLIC_SUPABASE_URL or EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY. " +
+      "Copy .env.example to .env and fill them in from the Supabase " +
+      "dashboard: Project Settings -> API.",
   );
 }
 
-export const supabase = createClient(url, anonKey, {
+// The SECRET key (sb_secret_... / service_role) must never appear here. It
+// bypasses RLS entirely, and anything in this file ships inside the bundle.
+export const supabase = createClient(url, publishableKey, {
   auth: {
     storage: AsyncStorage,
     autoRefreshToken: true,
