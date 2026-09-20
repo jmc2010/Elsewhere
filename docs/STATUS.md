@@ -70,8 +70,9 @@ about nine seconds.
   [`docs/measurements.md`](measurements.md).
 - **0010 catalog_search** — applied. Layer 1 + Layer 3 narrowing,
   spatial-first, no Google calls.
-- **0013 quality flags** / **0014 catalog_search locality** — written, **not
-  yet applied**. Both came out of hand-auditing the first real shortlist.
+- **0013 quality flags** / **0014 catalog_search locality** — applied.
+  22,957 places share an address; 292 have an uncorroborated locality. Both
+  came out of hand-auditing the first real shortlist.
 - **0011 radius guard** — applied. Clamps radius to 100 miles and validates
   coordinates.
 - **0012 google quota** — written, **not yet applied**. Per-user daily call
