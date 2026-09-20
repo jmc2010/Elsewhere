@@ -39,6 +39,14 @@ ENVELOPE = re.compile(r"\blive\b")
 # The only two Google values that may be written, each with one writer.
 PERMITTED_RPC = {"google_place_id_record", "google_business_status_record"}
 
+APP_SRC = ROOT / "src"
+
+# Server-side secrets. CLAUDE.md: "Never ship an API key in the app bundle."
+# An EXPO_PUBLIC_ prefix inlines the value into the JS bundle, so anything
+# named here appearing in app source is a shipped credential, not a config
+# mistake -- and for the Maps key it is a directly billable one.
+SERVER_ONLY_SECRETS = ("GOOGLE_MAPS_API_KEY", "ANTHROPIC_API_KEY")
+
 CREATE_PLACES = re.compile(
     r"create\s+table\s+(?:if\s+not\s+exists\s+)?places\s*\((.*?)\n\);",
     re.IGNORECASE | re.DOTALL,
@@ -109,6 +117,24 @@ def check_edge_functions() -> list[str]:
     return failures
 
 
+def check_app_bundle() -> list[str]:
+    """Server-side secrets must never be reachable from app source."""
+    failures = []
+    if not APP_SRC.exists():
+        return failures
+    for path in sorted(APP_SRC.rglob("*")):
+        if path.suffix not in {".ts", ".tsx", ".js", ".jsx"}:
+            continue
+        code = re.sub(r"//[^\n]*", "", path.read_text())
+        for secret in SERVER_ONLY_SECRETS:
+            if secret in code:
+                failures.append(
+                    f"{path.relative_to(ROOT)}: references {secret}, which is "
+                    f"server-side only and would be inlined into the bundle. "
+                    f"Call places-proxy instead.")
+    return failures
+
+
 def main() -> int:
     failures = []
     for path in sorted(MIGRATIONS.glob("*.sql")):
@@ -124,6 +150,7 @@ def main() -> int:
                 failures.append(f"{path.name}: places.{col} (added via ALTER)")
 
     failures.extend(check_edge_functions())
+    failures.extend(check_app_bundle())
 
     if failures:
         print("Google Places content may not be persisted. Offending code:\n")
@@ -137,7 +164,8 @@ def main() -> int:
         return 1
 
     print("OK: no Google Places content persisted in the catalog schema,")
-    print("    and no Google-derived value reaches a database call.")
+    print("    no Google-derived value reaches a database call, and no")
+    print("    server-side secret is reachable from app source.")
     return 0
 
 

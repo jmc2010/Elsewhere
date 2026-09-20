@@ -78,6 +78,9 @@ about nine seconds.
   and granted only to `service_role`.
 - **`places-proxy` edge function** — written, typechecks, **not yet
   deployed**. The only path to Google. Untested against the live API.
+- **Expo app scaffold** — SDK 57, RN 0.86, React 19, expo-router, TypeScript
+  strict. Home screen does location → `catalog_search` RPC → list. iOS bundle
+  builds clean. **Never run against a device.**
 
 ### Decided 2026-09-20: catalog_search is called as an RPC, not an edge function
 
@@ -137,9 +140,29 @@ Then hydrate a real shortlist from `catalog_search` and check three things:
 3. `live_status` distribution roughly matches the spike's ~73% — if `ok` is
    far below that, something in the resolution path differs from the spike.
 
-**Then the app.** Expo scaffold, `catalog_search` over RPC, filter sheet,
-shortlist, place detail. Phase 1's exit criteria is a real "where to eat"
-query returning 10 good cards under budget.
+**Run the app.** It has never been on a device.
+
+```bash
+cp .env.example .env     # fill in the two EXPO_PUBLIC_ values
+npm install
+npx expo start
+```
+
+The Home screen should ask for location with an in-context rationale, then
+list real places near you, nearest first, with cuisines. No Google call
+happens anywhere on that screen and none ever should.
+
+It signs in **anonymously** on first launch. That is deliberate: every catalog
+RLS policy is `to authenticated` and `catalog_search` is granted to that role,
+so the app needs an identity before it can ask what is nearby. An anonymous
+session is a real `auth.uid()`, so RLS, the Google quota and Layer 3 history
+all work from first launch, and Supabase can convert it to a permanent
+account later without losing history. It also keeps the cold start at zero
+friction, which is the competitive point against Zest's Plaid wall (§10).
+
+**Then the rest of Phase 1:** filter sheet, shortlist hydration through
+`places-proxy`, place detail. Exit criteria is a real "where to eat" query
+returning 10 good cards under budget.
 
 ### Two product questions that now have numbers behind them
 
