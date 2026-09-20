@@ -68,6 +68,16 @@ about nine seconds.
 - **Phase 0 exit criteria met.** Italian within 20 miles of Valley View
   returns 17 places in 54ms. Numbers and query shapes in
   [`docs/measurements.md`](measurements.md).
+- **0010 catalog_search** — written and tested locally, **not yet applied to
+  Supabase**. Layer 1 + Layer 3 narrowing, spatial-first, no Google calls.
+
+### Local test harness
+
+PostGIS now runs locally (PG17 + PostGIS 3.6; note `brew install postgis`
+builds against 17/18, not 16). The whole chain 0001→0010 rebuilds on a clean
+database and reproduces the Supabase promote numbers exactly — 39,304 / 548 /
+34,910. Worth keeping: it caught a spec violation in `catalog_search` that
+would have shipped.
 
 ### Connecting to Supabase from this machine
 
@@ -86,11 +96,15 @@ good cards under budget.
 The catalog is live and queryable, so the next pieces are the ones that turn
 it into a product:
 
-1. **`catalog-search` edge function.** PostGIS radius + cuisine over Layer 1,
-   joined against Layer 3 for vetoes and recency. **Build it spatial-first**
-   and resolve the cuisine slug to an id once — both decisions are measured
-   and argued in [`docs/measurements.md`](measurements.md). Do not let the
-   planner choose as the catalog grows; its spatial estimate is off by 500×.
+1. **Apply and verify `catalog_search` (0010) on Supabase.** Written and
+   tested locally; the Micro-instance timings still need confirming, since
+   local numbers say nothing about your instance.
+
+   **Still open: transport.** The spec lists `catalog-search` as an edge
+   function, but it touches no secrets, so calling the Postgres function
+   directly as an RPC from `supabase-js` would save a network hop inside a
+   90-second decision window. The function is the right primitive either way.
+   Decide before the Expo work, not after.
 2. **Google Cloud project + Places key.** Server-side only, never in the
    bundle.
 3. **`places-proxy` edge function.** The only path to Google. Quota, batching,
