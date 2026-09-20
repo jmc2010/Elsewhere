@@ -95,15 +95,35 @@ function haversineM(
   return 2 * R * Math.asin(Math.sqrt(a));
 }
 
-/** The whole point: reject rather than guess. */
+/**
+ * The whole point: reject rather than guess.
+ *
+ * `colocated` is how many OTHER catalog places sit within 30m. It decides
+ * whether proximity alone is enough, and it is not a detail:
+ *
+ * The same-building pass exists because at a few metres there is no other
+ * building, so a name disagreement means the two sources name one shop
+ * differently -- "Bayer's Kolonialwaren" and "Bayers Bakery" in Muenster.
+ * That reasoning collapses when the address holds more than one business,
+ * which in North Texas is 58% of the catalog.
+ *
+ * Rider's Smokehouse in Valley View closed years ago; its successor
+ * Middlebrooks Bar & Grill is 8m away and still trading. Without this check,
+ * resolving Rider's would accept Middlebrooks and bind a defunct restaurant
+ * to a live one's place_id permanently -- every hydration forever showing
+ * Middlebrooks' rating and hours under Rider's name.
+ */
 function acceptsResolution(
   catalogName: string, catalogLat: number, catalogLon: number,
   googleName: string, googleLat: number, googleLon: number,
+  colocated: number,
 ): boolean {
   const d = haversineM(catalogLat, catalogLon, googleLat, googleLon);
-  if (d <= SAME_BUILDING_M) return true;   // one building; names may differ
+  const nameAgrees = nameSimilarity(catalogName, googleName) >= MIN_NAME_SIMILARITY;
+  // Proximity alone settles it ONLY where nothing else shares the address.
+  if (d <= SAME_BUILDING_M && colocated === 0) return true;
   if (d > MAX_DISTANCE_M) return false;
-  return nameSimilarity(catalogName, googleName) >= MIN_NAME_SIMILARITY;
+  return nameAgrees;
 }
 
 // --- Types ------------------------------------------------------------------
@@ -115,6 +135,8 @@ interface CatalogPlace {
   lon: number;
   google_place_id: string | null;
   google_resolution_failed: boolean;
+  /** Other catalog places within 30m; 0 means the address is unshared. */
+  colocated_count: number;
 }
 
 /**
@@ -178,6 +200,7 @@ async function resolvePlaceId(
   const ok = acceptsResolution(
     place.name, place.lat, place.lon,
     hit.displayName?.text ?? "", hit.location.latitude, hit.location.longitude,
+    place.colocated_count,
   );
   return ok ? hit.id : null;
 }
@@ -252,7 +275,7 @@ Deno.serve(async (req: Request) => {
 
   const { data: rows, error: rowsErr } = await db
     .from("places")
-    .select("id, name, google_place_id, google_resolution_failed")
+    .select("id, name, google_place_id, google_resolution_failed, colocated_count")
     .in("id", ids)
     .eq("permanently_closed", false);
   if (rowsErr) return json({ error: rowsErr.message }, 500);
@@ -275,6 +298,7 @@ Deno.serve(async (req: Request) => {
     lon: coordById.get(r.id)?.lon ?? 0,
     google_place_id: r.google_place_id,
     google_resolution_failed: r.google_resolution_failed,
+    colocated_count: r.colocated_count ?? 0,
   }));
 
   // Budget the batch BEFORE spending any of it. A place needing resolution

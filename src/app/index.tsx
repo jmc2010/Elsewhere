@@ -12,9 +12,12 @@ import { useQuery } from "@tanstack/react-query";
 import * as Location from "expo-location";
 import { useCallback, useEffect, useState } from "react";
 import {
-  ActivityIndicator, FlatList, Pressable, SafeAreaView, StyleSheet, Text,
-  View,
+  ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View,
 } from "react-native";
+// react-native's own SafeAreaView is deprecated and ignores left/right insets
+// on landscape and notched devices. react-native-safe-area-context is the
+// supported replacement and already ships with the Expo template.
+import { SafeAreaView } from "react-native-safe-area-context";
 
 import { ensureSession, supabase } from "@/lib/supabase";
 
@@ -30,6 +33,15 @@ interface CatalogPlace {
   website: string | null;
   cuisines: string[];
   delivery_only: boolean;
+  /**
+   * True when Overture's locality is not corroborated by any neighbouring
+   * place, so it probably belongs to a different address. "Santiago's
+   * Restaurant" renders as Colorado City while sitting 1.1 miles from Valley
+   * View, and Colorado City is 261 miles west. The coordinates are right --
+   * the distance is computed from them -- so the fix is to drop the label,
+   * not the place.
+   */
+  locality_suspect: boolean;
   last_visited_at: string | null;
   visit_count: number;
 }
@@ -171,7 +183,9 @@ export default function Home() {
             <Text style={styles.cardName}>{item.name}</Text>
             <Text style={styles.cardMeta}>
               {(item.distance_meters / MILES).toFixed(1)} mi
-              {item.locality ? ` · ${item.locality}` : ""}
+              {item.locality && !item.locality_suspect
+                ? ` · ${item.locality}`
+                : ""}
             </Text>
             {item.cuisines.length > 0 && (
               <Text style={styles.cardCuisine}>{item.cuisines.join(" · ")}</Text>

@@ -70,6 +70,8 @@ about nine seconds.
   [`docs/measurements.md`](measurements.md).
 - **0010 catalog_search** — applied. Layer 1 + Layer 3 narrowing,
   spatial-first, no Google calls.
+- **0013 quality flags** / **0014 catalog_search locality** — written, **not
+  yet applied**. Both came out of hand-auditing the first real shortlist.
 - **0011 radius guard** — applied. Clamps radius to 100 miles and validates
   coordinates.
 - **0012 google quota** — written, **not yet applied**. Per-user daily call
@@ -166,6 +168,36 @@ friction, which is the competitive point against Zest's Plaid wall (§10).
 **Then the rest of Phase 1:** filter sheet, shortlist hydration through
 `places-proxy`, place detail. Exit criteria is a real "where to eat" query
 returning 10 good cards under budget.
+
+### What the first hand-audit found
+
+Auditing the first 25 results on a real phone surfaced two Overture problems
+that no amount of schema review would have caught, plus a bug in our own
+resolution rule. This is the §11 audit earning its keep.
+
+1. **Closed restaurants are still listed as open.** Rider's Smokehouse in
+   Valley View sold years ago and the premises have been two other places
+   since; Overture says `open`. Google's `businessStatus` at hydration is the
+   designed corrective (§11 risk 2) and `places-proxy` implements it — but it
+   only fires once that function is deployed.
+
+2. **That exposed a real bug in our resolution rule.** Rider's successor,
+   Middlebrooks Bar & Grill, is 8m away and trading. The 30m same-building
+   pass would have accepted Middlebrooks as Rider's and stored its
+   `place_id` permanently. **58% of the catalog shares an address within
+   30m**, so this was not a corner case. Fixed in 0013: proximity alone
+   settles a match only where `colocated_count = 0`.
+
+3. **Some addresses belong to a different place entirely.** "Santiago's
+   Restaurant" renders as Colorado City, 261 miles west, while sitting 1.1
+   miles from Valley View. The coordinates are right and the distance is
+   correct; the address block is wrong. ~1.65% of places have a postcode that
+   disagrees with their neighbours'. 0013 flags the tighter case — no
+   neighbour corroborates the locality — which is 0.74%, and the UI drops the
+   label rather than the place.
+
+**Keep auditing.** Three real findings in the first 25 rows is a good rate,
+and local knowledge is the only instrument that catches any of them.
 
 ### Two product questions that now have numbers behind them
 
