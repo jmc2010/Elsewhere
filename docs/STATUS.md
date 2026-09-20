@@ -44,6 +44,9 @@ about nine seconds.
   (`-97.9 32.3 -96.1 33.75`) landed **39,852 rows** in `overture_staging`:
   32,770 `open`, 6,534 null, 548 `permanently_closed`. Matched the local
   dry-run exactly. Idempotent — re-running rebuilds the box.
+- **0005 brand cuisine map** — written, **not yet applied**. 201 chain names →
+  cuisine, plus a `norm_place_name()` function. Closes **34.1%** of the
+  no-cuisine gap (4,454 of 13,052 rows). Every row is `reviewed = false`.
 
 ### Connecting to Supabase from this machine
 
@@ -56,41 +59,73 @@ is not needed; the shared pooler is already IPv4.
 
 ## Next
 
-**Build the category → cuisine mapping, then promote.** This is the last thing
-standing between here and the Phase 0 exit criteria — `places` is still empty;
-everything so far is in `overture_staging`.
-
-Start by looking at what actually landed:
+**1. Audit the brand map (0005), then apply it.** Every row is
+`reviewed = false` on purpose — these are proposed mappings, not reviewed
+ones, and the spec requires a human pass before the mapping is applied.
+Sort by `confidence` and argue with anything under 0.8:
 
 ```sql
-select primary_category, count(*)
-from overture_staging
-group by 1 order by 2 desc;
+select b.name_norm, c.slug, b.confidence, b.note
+from brand_cuisine_map b join cuisines c on c.id = b.cuisine_id
+where b.confidence < 0.8 order by b.confidence;
 ```
 
-182 distinct categories over four branches — `restaurant` (120 leaves),
-`casual_eatery` (27), `alcoholic_beverage_venue` (26),
-`non_alcoholic_beverage_venue` (8). The spec calls this the hardest data
-problem in the project, and it is still the step to be careful about, but it
-is easier than the spec assumed — **re-scope it before starting** (see below).
+A cross-check against Overture's own categories agrees almost everywhere
+(`deli-sandwiches` ↔ `sandwich_shop` 794 rows, `burgers` ↔
+`burger_restaurant` 325, `wings` ↔ `chicken_wings_restaurant` 68), which is
+reassuring but not a substitute for reading the low-confidence ones.
 
-The shape of the work:
+**2. Decide on the taxonomy gaps.** Two leaves are missing and it shows:
 
-1. Most leaves are already cuisine-shaped (`mexican_restaurant`,
-   `texmex_restaurant`, `italian_restaurant`, `barbecue_restaurant`) and map
-   to the 93 seeded cuisine leaves by reviewed rename.
-2. The real problem is the leaves that carry no cuisine at all —
-   `restaurant` (4,602 rows), `fast_food_restaurant` (3,249),
-   `casual_eatery`. Together that is a large fraction of the catalog with no
-   filterable cuisine, and it needs a different signal: brand/name matching,
-   `alternate_categories`, or a Claude pass over names.
-3. Hand-audit the result for North Texas. The developer lives in the box, so
-   bad mappings should be visible by eye.
+- **Chicken.** Overture has a `chicken_restaurant` category with **872 rows**
+  in this metro; our taxonomy has no chicken leaf, so Chick-fil-A, KFC,
+  Popeyes, Church's, Golden Chick, Raising Cane's and Chicken Express are all
+  parked on `fast-food` at confidence 0.50. That is the single largest
+  mapping compromise in 0005 and the easiest to fix — add `chicken` under
+  `american`.
+- **Hot dogs.** Smaller, but Wienerschnitzel has nowhere sensible to go.
 
-Then write the promote step: `overture_staging` → `places`, **excluding
-`operating_status = 'permanently_closed'`** (548 rows). Every closed place
-that reaches the catalog is a wasted Google hydration call against a
-restaurant that no longer exists.
+**3. Build `category_cuisine_map` for the 182 Overture categories.** Most are
+already cuisine-shaped (`mexican_restaurant`, `texmex_restaurant`,
+`italian_restaurant`) and map by reviewed rename. This is the two-thirds of
+the catalog the brand map does not touch.
+
+**4. The Claude name pass** over the ~8,100 unique independent names — the
+remaining 62% of the no-cuisine gap. Names carry the signal (*Angels NY
+Pizza*, *Elizandro's Mexican Food*, *Ponder Coffee Company*), so this is the
+offline pass the spec calls for, just keyed on names rather than categories.
+
+**5. Promote** `overture_staging` → `places`, excluding
+`operating_status = 'permanently_closed'`.
+
+### Things that will not work, already checked
+
+- **`alternate_categories` is a dead end.** 110 of 13,052 cuisine-less rows
+  have any. Do not build around it.
+- **`confidence` does not separate good rows from bad.** Suspect rows score
+  *higher* than normal ones (0.922 vs 0.886 mean, identical 0.95 median). It
+  is useless as a junk filter.
+- **Never substring-match brand names.** `brand_cuisine_map` is exact-match on
+  a normalized name for the same reason `%bar%` matched `barber`.
+
+### Data-quality items for before anyone sees the app
+
+None of these block the mapping work, but they all make a demo look broken:
+
+- **465 rows (1.2%) carry legal entity names**, e.g.
+  `Lsf5 Cactus, Llc.d/b/a Lone Star Steakhouse & Saloon`, `Rowdy's Diner,
+  Llc`. A mix of real restaurants filed under their LLC name — which display
+  terribly on a shortlist card — and genuine non-restaurants like
+  `Xalka Healthcare Solutions, Llc`.
+- **Delivery-only virtual brands** are in the catalog as places: `Barstool
+  Bites`, `The Burger Den`, `Tenderfix by Noah Schnapp`, `Pardon My
+  Cheesesteak`, `The Meltdown`. You cannot go to them. Whether they belong in
+  a "where should we go" app is a product decision, flagged in 0005's notes.
+- **Vending machines as places** — `Coca-Cola Freestyle` (5) and `Coca-Cola`
+  (3) are mapped as food-and-drink POIs. Left unmapped deliberately.
+- **~90 places have non-Latin names** (Japanese, Thai, Korean) that normalize
+  to an empty string. 0005 rejects `''` as a key so they cannot collide; they
+  fall through to the category map instead.
 
 ## What changed in Overture, and why it matters
 
