@@ -200,6 +200,17 @@ resolution rule. This is the §11 audit earning its keep.
 **Keep auditing.** Three real findings in the first 25 rows is a good rate,
 and local knowledge is the only instrument that catches any of them.
 
+### Field testing needs a real build
+
+Expo Go loads JS from Metro over the local network, so it dies the moment the
+phone leaves the house — which is exactly where this app is meant to be used
+("usually in the car", §1). `docs/builds.md` has the EAS setup; the short
+version is `npx eas build -p android --profile preview` for a standalone APK.
+
+That also makes the app identifiers live: `app.goelsewhere.elsewhere` for
+both platforms. Free to change today, permanent for iOS after the first App
+Store submission, and entangled with the trademark question below.
+
 ### Two product questions that now have numbers behind them
 
 - **About one card in four will have no rating, price or open-now.** Does an

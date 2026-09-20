@@ -11,7 +11,8 @@
       "icon": "./assets/expo.icon",
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Elsewhere uses your location to find places to eat near you. Your location is never shared with anyone."
-      }
+      },
+      "bundleIdentifier": "app.goelsewhere.elsewhere"
     },
     "android": {
       "adaptiveIcon": {
@@ -20,7 +21,8 @@
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "app.goelsewhere.elsewhere"
     },
     "web": {
       "output": "static",
