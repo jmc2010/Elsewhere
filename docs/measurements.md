@@ -118,43 +118,79 @@ restaurant to a different location permanently, and every future hydration for
 that place — for every user, forever — returns the wrong restaurant's hours,
 rating and reviews.
 
-### The fix
+### The fix is client-side validation, NOT locationRestriction
 
-`locationRestriction` with a rectangle is a hard filter and is honoured.
-Verified directly: the same Fried Pie Shop query that returned a confident
-result 8.4km away under bias returns `{}` under restriction.
+`locationRestriction` was the obvious response and it is the wrong one. Tried
+against the same 30 places, it **lost four correct matches** while still
+returning wrong businesses inside the box:
 
-```json
-"locationRestriction": {"rectangle": {"low": {...}, "high": {...}}}
+| Place | Under bias | Under restriction |
+|---|---|---|
+| Bless That Jerk | 3 m, name 1.00 | `no_result` |
+| Chester's Chicken | 104 m, name 1.00 | `no_result` |
+| Stiletto Kitchen | 3 m, name 1.00 | 1,411 m → *Parker Brothers Traildust* |
+| Stiff Peaks Confections | 3 m, name 1.00 | 418 m → *Fruit Delite Krum tx* |
+
+And it did not remove the need to validate: that run still produced five
+`mismatch` rows within 2km, including `Subway` → *Firehouse Subs Frisco
+Square* at 414m.
+
+So the restriction costs recall and buys nothing, because the client-side
+check is required either way.
+
+| Approach | Resolved |
+|---|---|
+| **`locationBias` + validate distance and name client-side** | **22/30 (73%)** |
+| `locationRestriction` (2km rectangle) | 20/30 (67%) |
+
+**The validation rule, which is what actually provides the safety:**
+
+```
+accept if  distance <= 30m                              (same building; name may differ)
+       or (distance <= 250m and name_similarity >= 0.55)
+otherwise reject -> no_result
 ```
 
-Note `searchText` takes a **rectangle** here, not a circle.
+The 30m clause matters. "Bayer's Kolonialwaren" resolves to "Bayers Bakery"
+5m away and "Ranchman's Ponder Steakhouse" to "Ranchman's by Marty B" 2m
+away. Both are correct; at a few metres there is no other building, and
+insisting on name agreement would throw away good resolutions.
 
-### Why this changes how the spec's 85% threshold should be read
+Under bias, validation rejects all eight dangerous far-matches, including the
+60km Frutería and both wrong-branch Subways.
 
-Spec §4 treats unresolvable places as a flagged edge case, which assumes
-failures are *visible*. Under `locationBias` they were not — a wrong answer
-and a right answer are indistinguishable in the response.
+### Rural was not worse than urban
 
-Under `locationRestriction` the failure mode becomes `no_result`: an honest
-gap that can be flagged, fallen back from, and retried on a later Overture
-release. **A lower rate with honest failures is a better position than a
-higher rate with silent corruption.** Judge the result on the failure mode
-first and the percentage second.
+Contrary to expectation: rural 15/20 (75%), urban 7/10 (70%). The urban
+failures were ambiguous chain branches (two Subways), which is a different
+problem from thin coverage. The worry that Elsewhere's rural advantage would
+be undercut by unresolvable places is not supported at n=30 — though 30 is
+small and this is worth re-measuring on a larger sample before leaning on it.
 
 ### Requirements this places on `places-proxy`
 
-1. **Use `locationRestriction`, never `locationBias`**, for resolution.
-2. **Validate the returned coordinates anyway.** We already compute the
-   distance in order to classify; rejecting an out-of-radius resolution is a
-   few lines and removes the dependency on Google continuing to honour the
-   restriction.
-3. **Treat resolution failure as normal, not exceptional.** Flag the row
-   (`google_resolution_failed` already exists on `places`) and render
-   catalog-only.
+1. **Use `locationBias`, and validate the returned coordinates and name
+   yourself** using the rule above. Do not rely on Google to bound anything.
+2. **Reject rather than guess.** A rejected resolution is `no_result`, which
+   is recoverable. A wrong `place_id` is stored permanently, is returned to
+   every user forever, and has no runtime signal that anything is wrong.
+3. **Treat resolution failure as normal, not exceptional.** ~27% of places
+   will not resolve. Flag the row (`places.google_resolution_failed` already
+   exists) and render catalog-only.
+4. **Retry on later Overture releases.** Some `no_result` rows are coordinate
+   drift rather than absence, so a failed resolution should not be permanent.
 
-### Still outstanding
+### Why the spec's 85% threshold is the wrong test
 
-The full 30-place run under `locationRestriction` has not been recorded here
-yet. The number to watch is whether `same_name_different_place` goes to zero;
-the headline percentage is the less important half of the result.
+§4 treats unresolvable places as a flagged edge case, which assumes failures
+are *visible*. Under `locationBias` alone they are not — a wrong answer and a
+right answer are indistinguishable in the response body.
+
+With validation the failure mode becomes an honest `no_result`. **A 73% rate
+with honest failures is a far better position than an 85% rate where some of
+the 85% is silently wrong.** Judge the failure mode first, the percentage
+second.
+
+At 73%, roughly one shortlist card in four shows no rating. That is a product
+question as much as an engineering one, and it should be settled before the
+shortlist UI is designed around every card having one.

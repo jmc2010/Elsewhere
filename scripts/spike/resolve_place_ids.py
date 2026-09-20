@@ -136,17 +136,20 @@ def text_search(key: str, place: dict, timeout: float = 10.0) -> dict | None:
     body = json.dumps({
         "textQuery": query,
         "maxResultCount": 1,
-        # locationRESTRICTION, not locationBias. The first run used a 2km
-        # bias circle and Google returned a result 60km outside it -- bias is
-        # a hint it is free to ignore when it finds a better text match
-        # elsewhere. That produced five wrong-branch chain matches (Subway
-        # twice, Dickey's, The Original Fried Pie Shop) at 2.4km to 14km, each
-        # of which would have bound a real restaurant to another location's
-        # place_id permanently and silently.
-        #
-        # A restriction can only return nothing, which is the failure we can
-        # actually handle: flag it and fall back to catalog-only display.
-        "locationRestriction": bounding_rect(place["lat"], place["lon"], RESTRICT_M),
+        # locationBias, NOT locationRestriction -- measured, see
+        # docs/measurements.md. Bias is advisory and will return results far
+        # outside the circle, so the returned coordinates must be validated
+        # client-side in classify(). But the restriction was tried and is
+        # worse: it lost four correct matches (Bless That Jerk and Chester's
+        # Chicken went to no_result; Stiletto Kitchen and Stiff Peaks were
+        # replaced by different businesses inside the box) and still needed
+        # the same validation, because it also returned wrong businesses
+        # within 2km. 22/30 with bias + validation against 20/30 with the
+        # restriction.
+        "locationBias": {"circle": {
+            "center": {"latitude": place["lat"], "longitude": place["lon"]},
+            "radius": RESTRICT_M,
+        }},
     }).encode()
     if DEBUG:
         print("\n--- REQUEST ---")
