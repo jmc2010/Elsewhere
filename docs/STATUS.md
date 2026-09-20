@@ -44,9 +44,13 @@ about nine seconds.
   (`-97.9 32.3 -96.1 33.75`) landed **39,852 rows** in `overture_staging`:
   32,770 `open`, 6,534 null, 548 `permanently_closed`. Matched the local
   dry-run exactly. Idempotent — re-running rebuilds the box.
-- **0005 brand cuisine map** — written, **not yet applied**. 201 chain names →
-  cuisine, plus a `norm_place_name()` function. Closes **34.1%** of the
-  no-cuisine gap (4,454 of 13,052 rows). Every row is `reviewed = false`.
+- **0005 brand cuisine map** — applied. 201 chain names → cuisine, plus a
+  `norm_place_name()` function. Closes **34.1%** of the no-cuisine gap
+  (4,454 of 13,052 rows). Every row is `reviewed = false`.
+- **0006 chicken cuisine** — written, **not yet applied**. Adds a `chicken`
+  leaf under `american` and moves 16 brands onto it (974 places). Decided
+  2026-09-20: one leaf, not a fried/rotisserie split, because Overture gives
+  only `chicken_restaurant` and there is no signal to split on.
 
 ### Connecting to Supabase from this machine
 
@@ -70,20 +74,19 @@ from brand_cuisine_map b join cuisines c on c.id = b.cuisine_id
 where b.confidence < 0.8 order by b.confidence;
 ```
 
+After 0006 that queue is **38 rows**, down from 53 — the 0.65–0.75 judgment
+calls. `Dairy Queen` (`ice-cream`) versus `DQ Grill & Chill` (`burgers`) is
+the one most worth a second opinion; the brand is genuinely split and the map
+currently disagrees with itself on purpose.
+
 A cross-check against Overture's own categories agrees almost everywhere
 (`deli-sandwiches` ↔ `sandwich_shop` 794 rows, `burgers` ↔
 `burger_restaurant` 325, `wings` ↔ `chicken_wings_restaurant` 68), which is
 reassuring but not a substitute for reading the low-confidence ones.
 
-**2. Decide on the taxonomy gaps.** Two leaves are missing and it shows:
-
-- **Chicken.** Overture has a `chicken_restaurant` category with **872 rows**
-  in this metro; our taxonomy has no chicken leaf, so Chick-fil-A, KFC,
-  Popeyes, Church's, Golden Chick, Raising Cane's and Chicken Express are all
-  parked on `fast-food` at confidence 0.50. That is the single largest
-  mapping compromise in 0005 and the easiest to fix — add `chicken` under
-  `american`.
-- **Hot dogs.** Smaller, but Wienerschnitzel has nowhere sensible to go.
+**2. Hot dogs are the remaining taxonomy gap.** Small — Wienerschnitzel has
+nowhere sensible to go and sits on `fast-food` at 0.60. Decide whether it is
+worth a leaf. (Chicken was the big one and is handled in 0006.)
 
 **3. Build `category_cuisine_map` for the 182 Overture categories.** Most are
 already cuisine-shaped (`mexican_restaurant`, `texmex_restaurant`,
