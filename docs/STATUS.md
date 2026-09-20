@@ -68,8 +68,30 @@ about nine seconds.
 - **Phase 0 exit criteria met.** Italian within 20 miles of Valley View
   returns 17 places in 54ms. Numbers and query shapes in
   [`docs/measurements.md`](measurements.md).
-- **0010 catalog_search** — written and tested locally, **not yet applied to
-  Supabase**. Layer 1 + Layer 3 narrowing, spatial-first, no Google calls.
+- **0010 catalog_search** — applied. Layer 1 + Layer 3 narrowing,
+  spatial-first, no Google calls.
+- **0011 radius guard** — written, **not yet applied**. Clamps radius to 100
+  miles and validates coordinates.
+
+### Decided 2026-09-20: catalog_search is called as an RPC, not an edge function
+
+It touches no secrets, and the hop matters inside a 90-second decision window.
+Quota enforcement — the actual reason to put something behind an edge function
+— lives in `places-proxy`, which is a separate concern. This overrules the
+spec's §8 listing of `catalog-search` as an edge function; **update the spec
+when `places-proxy` lands.**
+
+The security review that supported it, so it is not re-litigated from scratch:
+
+- Passing another household's `p_household_id` leaks nothing. `visits_member`
+  is `using (is_household_member(household_id))`, so RLS returns no rows
+  regardless of the argument.
+- Vetoes are scoped by `place_vetoes_self` (`user_id = auth.uid()`), which is
+  why the function's veto check needs no user predicate of its own.
+- The real gap was the **unbounded radius**, closed in 0011. Over RPC every
+  argument is attacker-controlled, and a continental radius turns the bitmap
+  index scan into a full-catalog scan. That burns database time rather than
+  Google spend, so it would never appear in the calls-per-session metric.
 
 ### Local test harness
 
