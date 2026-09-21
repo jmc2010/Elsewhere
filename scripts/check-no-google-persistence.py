@@ -47,6 +47,21 @@ APP_SRC = ROOT / "src"
 # mistake -- and for the Maps key it is a directly billable one.
 SERVER_ONLY_SECRETS = ("GOOGLE_MAPS_API_KEY", "ANTHROPIC_API_KEY")
 
+# Build configuration. The source scan cannot see a value pasted into an
+# environment variable, which is how a Google key ends up compiled into an
+# APK: both Supabase and Google call theirs an "API key", and both are pasted
+# into a dashboard. Deleting the variable afterwards does not un-ship the
+# build, so the only remedy is rotating the key -- worth catching here first.
+BUILD_CONFIG = ("app.json", "app.config.js", "app.config.ts", "eas.json",
+                ".env.example", "package.json")
+
+# A real Google API key is AIza followed by 35 more characters. Documentation
+# placeholders like "AIza..." are shorter and will not match.
+GOOGLE_KEY_LITERAL = re.compile(r"AIza[0-9A-Za-z_\-]{35}")
+
+# Anything client-visible must not be named after a server-side system.
+PUBLIC_VAR = re.compile(r"EXPO_PUBLIC_[A-Z0-9_]*(GOOGLE|ANTHROPIC|SECRET|SERVICE_ROLE)[A-Z0-9_]*")
+
 CREATE_PLACES = re.compile(
     r"create\s+table\s+(?:if\s+not\s+exists\s+)?places\s*\((.*?)\n\);",
     re.IGNORECASE | re.DOTALL,
@@ -135,6 +150,39 @@ def check_app_bundle() -> list[str]:
     return failures
 
 
+def check_build_config() -> list[str]:
+    """A shipped credential is worse than a stored one: it cannot be recalled."""
+    failures = []
+    for name in BUILD_CONFIG:
+        path = ROOT / name
+        if not path.exists():
+            continue
+        text = path.read_text()
+        # .env files document the correct handling in # comments, and those
+        # necessarily name the very variables being banned. Flagging the
+        # instructions that tell you what to do instead is how a check gets
+        # switched off.
+        if path.suffix == ".example" or path.name.startswith(".env"):
+            text = re.sub(r"^\s*#[^\n]*$", "", text, flags=re.MULTILINE)
+        rel = path.relative_to(ROOT)
+        if GOOGLE_KEY_LITERAL.search(text):
+            failures.append(
+                f"{rel}: contains a literal Google API key. It would be "
+                f"compiled into the bundle. Rotate the key -- removing it "
+                f"here does not un-ship a build that already has it.")
+        for m in PUBLIC_VAR.finditer(text):
+            failures.append(
+                f"{rel}: {m.group(0)} is client-visible and names a "
+                f"server-side system. EXPO_PUBLIC_ inlines the value into "
+                f"the bundle.")
+        for secret in SERVER_ONLY_SECRETS:
+            if re.search(rf"\b{secret}\b\s*[:=]", text):
+                failures.append(
+                    f"{rel}: assigns {secret}, which belongs in a Supabase "
+                    f"edge function secret, not in build config.")
+    return failures
+
+
 def main() -> int:
     failures = []
     for path in sorted(MIGRATIONS.glob("*.sql")):
@@ -151,6 +199,7 @@ def main() -> int:
 
     failures.extend(check_edge_functions())
     failures.extend(check_app_bundle())
+    failures.extend(check_build_config())
 
     if failures:
         print("Google Places content may not be persisted. Offending code:\n")
@@ -165,7 +214,7 @@ def main() -> int:
 
     print("OK: no Google Places content persisted in the catalog schema,")
     print("    no Google-derived value reaches a database call, and no")
-    print("    server-side secret is reachable from app source.")
+    print("    server-side secret is reachable from app source or build config.")
     return 0
 
 
