@@ -132,3 +132,23 @@ in this project since the initial scaffold would have been OTA-able.
 npx expo start            # same Wi-Fi
 npx expo start --tunnel   # anywhere, slower
 ```
+
+
+## Why `web.output` is `single`, not `static`
+
+`eas update` exports **every platform**, web included. With the template's
+default `"output": "static"`, Expo server-renders each route in Node at export
+time — and this app cannot be server-rendered: `supabase-js` restores its
+session through AsyncStorage, which touches `window`, and Node has none. The
+whole update fails with:
+
+```
+ReferenceError: window is not defined
+```
+
+We do not ship web. `"single"` emits a plain SPA shell with no server render,
+which keeps `npx expo start --web` usable for a quick look and removes the
+class of failure entirely. It affects web bundling only — no rebuild needed.
+
+If web ever becomes a target, the fix is to guard the Supabase client's
+storage for server rendering rather than to switch `output` back.
