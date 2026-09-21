@@ -23,6 +23,7 @@ import {
   DEFAULT_FILTERS, FilterSheet, Filters,
 } from "@/components/FilterSheet";
 import { LocationPicker, Origin } from "@/components/LocationPicker";
+import { SurpriseReveal } from "@/components/SurpriseReveal";
 import { ensureSession, supabase } from "@/lib/supabase";
 
 /** Mirrors catalog_search()'s RETURNS TABLE. */
@@ -101,6 +102,7 @@ export default function Home() {
   // Where the search starts from: the device, or a town you are travelling to.
   const [origin, setOrigin] = useState<Origin>({ kind: "me" });
   const [originOpen, setOriginOpen] = useState(false);
+  const [surpriseOpen, setSurpriseOpen] = useState(false);
   const [sessionId] = useState(
     () => `app-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
   );
@@ -361,6 +363,17 @@ export default function Home() {
           </Text>
         )}
       </View>
+      <Pressable
+        style={styles.surprise}
+        onPress={() => setSurpriseOpen(true)}
+        disabled={shown.length === 0}
+      >
+        <Text style={styles.surpriseText}>Surprise me</Text>
+        <Text style={styles.surpriseHint}>
+          One pick from these {shown.length}. Three rerolls, then it stands.
+        </Text>
+      </Pressable>
+
       <FlatList
         data={shown}
         keyExtractor={(p) => p.place_id}
@@ -375,6 +388,14 @@ export default function Home() {
               : "Nothing matched. Try a wider radius or fewer cuisines."}
           </Text>
         }
+      />
+      <SurpriseReveal
+        visible={surpriseOpen}
+        // Sampled from exactly what is on screen, so the guardrails the user
+        // set are the guardrails Surprise Me obeys (spec §5.2).
+        candidates={shown}
+        sessionId={sessionId}
+        onClose={() => setSurpriseOpen(false)}
       />
       <LocationPicker
         visible={originOpen}
@@ -498,6 +519,13 @@ const styles = StyleSheet.create({
     borderRadius: 12, alignItems: "center",
   },
   buttonText: { color: "#fff", fontSize: 16, fontWeight: "600" },
+  surprise: {
+    marginHorizontal: 20, marginTop: 6, marginBottom: 12,
+    backgroundColor: "#111", borderRadius: 14, paddingVertical: 16,
+    alignItems: "center", gap: 3,
+  },
+  surpriseText: { color: "#fff", fontSize: 18, fontWeight: "700" },
+  surpriseHint: { color: "#b9b9b9", fontSize: 13 },
   list: { paddingHorizontal: 20, paddingBottom: 40, gap: 10 },
   card: {
     paddingVertical: 14, paddingHorizontal: 16, borderRadius: 12,
