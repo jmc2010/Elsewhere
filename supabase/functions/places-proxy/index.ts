@@ -31,10 +31,18 @@ const PLACE_DETAILS = "https://places.googleapis.com/v1/places";
 // Shortlist hydration deliberately does NOT request the Atmosphere set. At a
 // shortlist of 25 that is the difference between Enterprise ($20/1k) and
 // Enterprise+Atmosphere ($25/1k) on every card the user never opens.
+//
+// NOTE THE PREFIXING, which differs by endpoint and is not interchangeable:
+//
+//   searchText     returns {"places": [...]}, so fields are "places.rating"
+//   Place Details  returns a single Place, so fields are plain "rating"
+//
+// Getting it wrong produces a 400 from Google that reads like a permissions
+// or key problem. This mask goes to Place Details, so it is unprefixed.
 const MASK_SHORTLIST = [
   "id", "displayName", "location", "rating", "userRatingCount", "priceLevel",
   "regularOpeningHours", "businessStatus", "websiteUri",
-].map((f) => `places.${f}`).join(",");
+].join(",");
 
 // Detail view: one place, opened deliberately, so Atmosphere is justified.
 const MASK_DETAIL = [
@@ -45,7 +53,8 @@ const MASK_DETAIL = [
   "servesCocktails",
 ].join(",");
 
-// Resolution field mask: only what the match decision needs. Never more.
+// Resolution goes to searchText, so these ARE prefixed. Only what the match
+// decision needs, never more -- the mask selects the billing SKU.
 const MASK_RESOLVE = "places.id,places.displayName,places.location";
 
 // --- Resolution validation --------------------------------------------------
@@ -211,7 +220,12 @@ async function placeDetails(
   const res = await fetch(`${PLACE_DETAILS}/${googlePlaceId}`, {
     headers: { "X-Goog-Api-Key": key, "X-Goog-FieldMask": mask },
   });
-  if (!res.ok) throw new Error(`details ${res.status}: ${await res.text()}`);
+  if (!res.ok) {
+    throw new Error(
+      `details ${res.status} for ${googlePlaceId} (mask="${mask}"): ` +
+        `${await res.text()}`,
+    );
+  }
   return await res.json() as LiveFields;
 }
 
