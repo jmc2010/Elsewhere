@@ -297,9 +297,23 @@ Store submission, and entangled with the trademark question below.
   unresolved place rank lower, get a distinct treatment, or drop out of the
   shortlist? Dropping it would quietly reduce Elsewhere to "places Google
   knows well", which is the opposite of the thesis.
-- **The daily quota is 60 calls.** That is roughly two full sessions, chosen
-  as a runaway guard rather than a product limit. Revisit it against real
-  calls-per-session data rather than by guessing a second time.
+- **The daily quota is 60 calls for real accounts**, overridable per profile
+  (0019). Development accounts are set to 2000; the default stays 60 so that
+  raising it for building does not have to be remembered and undone before
+  launch.
+
+  **Pre-launch check:** confirm no unintended account carries an override.
+
+  ```sql
+  select id, daily_google_call_limit from profiles
+   where daily_google_call_limit is not null;
+  ```
+
+- **The quota day is UTC, which resets at 7pm Central.** A user's budget
+  refreshes in the middle of dinner, which is exactly when the app is used.
+  Not a bug, but arbitrary and odd-looking in production. Fixing it properly
+  means a timezone on `profiles` and a local day boundary in
+  `google_quota_reserve`.
 
 ### Known follow-up: duplicate catalog rows
 
