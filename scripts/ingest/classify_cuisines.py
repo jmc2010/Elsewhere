@@ -62,6 +62,10 @@ if "anthropic" not in sys.modules:
                                   *sys.argv[1:]])
 
 MODEL = "claude-opus-5"
+
+# Explicit "no cuisine" value. See schema() for why this is a sentinel rather
+# than a nullable field.
+UNKNOWN = "unknown"
 # Batch API is 50% of standard pricing and this is the definition of a job
 # that does not need to be interactive.
 INPUT_PER_MTOK = 5.00
@@ -81,17 +85,17 @@ cuisine slug from the taxonomy below, or null.
 
 Rules:
 - Use ONLY slugs from the taxonomy. Never invent one.
-- Return null when the name genuinely carries no cuisine signal. "Jbm \
-Specialties, Llc", "Food Court", "The Corner Spot" are null. Guessing is worse \
-than null here: a wrong cuisine makes a place appear in a filter it does not \
-belong in, which is harder for a user to notice than its absence.
+- Return "unknown" when the name genuinely carries no cuisine signal. "Jbm \
+Specialties, Llc", "Food Court", "The Corner Spot" are unknown. Guessing is \
+worse than "unknown" here: a wrong cuisine makes a place appear in a filter it \
+does not belong in, which is harder for a user to notice than its absence.
 - Judge the name only. You have no menu, no reviews, no location.
 - Prefer the specific slug over its parent group when the name supports it: \
 "Angels NY Pizza" is pizza-classic, not italian-classic.
-- A person's name alone ("Elizandro's") is null unless the rest of the name \
+- A person's name alone ("Elizandro's") is unknown unless the rest of the name \
 says otherwise ("Elizandro's Mexican Food" is mexican).
 - Words like Cafe, Grill, Kitchen, Bar and Restaurant are venue words, not \
-cuisine. "Main Street Grill" is null, not barbecue.
+cuisine. "Main Street Grill" is unknown, not barbecue.
 
 Taxonomy (slug -- label, grouped by parent):
 {taxonomy}
@@ -174,9 +178,15 @@ def schema(slugs: set[str]) -> dict:
                     "type": "object",
                     "properties": {
                         "name": {"type": "string"},
+                        # A sentinel, NOT a nullable type. A union type
+                        # ["string","null"] alongside enum values is rejected:
+                        # "Enum value 'argentinian' does not match declared
+                        # type ['string','null']". It also reads better --
+                        # "unknown" is a choice the model makes, where a null
+                        # is indistinguishable from an omission.
                         "cuisine_slug": {
-                            "type": ["string", "null"],
-                            "enum": sorted(slugs) + [None],
+                            "type": "string",
+                            "enum": sorted(slugs) + [UNKNOWN],
                         },
                         "confidence": {
                             "type": "string",
@@ -193,13 +203,23 @@ def schema(slugs: set[str]) -> dict:
     }
 
 
+# Measured from a probe, not guessed. The first version assumed 25 output
+# tokens per name and came in 3.4x under: Opus 5 thinks by default, and the
+# thinking tokens are billed as output. At effort "low" this is far smaller,
+# but it is still not zero.
+OUT_TOKENS_PER_NAME = 45
+
+
 def estimate(names: list[str], taxonomy: str) -> float:
     # ~4 chars per token is close enough to decide whether to press go.
     sys_tok = len(SYSTEM.format(taxonomy=taxonomy)) / 4
     n_chunks = (len(names) + CHUNK - 1) // CHUNK
     names_tok = sum(len(n) for n in names) / 4
-    in_tok = sys_tok * n_chunks + names_tok
-    out_tok = len(names) * 25          # one short JSON object per name
+
+    # The taxonomy is identical in every request, so only the first pays full
+    # price; the rest are cache reads at ~10%.
+    in_tok = sys_tok * (1.25 + 0.1 * (n_chunks - 1)) + names_tok
+    out_tok = len(names) * OUT_TOKENS_PER_NAME
     cost = (in_tok / 1e6 * INPUT_PER_MTOK + out_tok / 1e6 * OUTPUT_PER_MTOK)
     return cost * BATCH_DISCOUNT
 
@@ -284,6 +304,9 @@ def main() -> int:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--probe", action="store_true",
+                    help="send ONE synchronous request with 3 names, to see "
+                         "the real error without a batch round-trip")
     ap.add_argument("--limit", type=int, help="classify at most this many names")
     ap.add_argument("--out", default="cuisine_names.tsv")
     ap.add_argument("--emit-sql", metavar="TSV",
@@ -336,12 +359,43 @@ def main() -> int:
                 # makes the per-name cost essentially just the name.
                 system=[{"type": "text", "text": system_text,
                          "cache_control": {"type": "ephemeral"}}],
-                output_config={"format": {"type": "json_schema",
-                                          "schema": schema(slugs)}},
+                output_config={
+                    # Classification is the archetypal low-effort task: a
+                    # fixed taxonomy, one short judgement per name, no
+                    # multi-step reasoning. The probe showed 138 thinking
+                    # tokens for three names at the default effort, which is
+                    # most of the output bill for no visible benefit.
+                    "effort": "low",
+                    "format": {"type": "json_schema",
+                               "schema": schema(slugs)},
+                },
                 messages=[{"role": "user",
                            "content": "\n".join(group)}],
             ),
         ))
+
+    if args.probe:
+        # One synchronous request. A batch reports only "errored" per request,
+        # so a malformed request costs a full round-trip to diagnose; this
+        # surfaces the real 400 immediately.
+        print("\nprobe: one synchronous request, 3 names")
+        try:
+            r = client.messages.create(
+                model=MODEL,
+                max_tokens=2000,
+                system=[{"type": "text", "text": system_text,
+                         "cache_control": {"type": "ephemeral"}}],
+                output_config={"effort": "low",
+                               "format": {"type": "json_schema",
+                                          "schema": schema(slugs)}},
+                messages=[{"role": "user", "content": "\n".join(names[:3])}],
+            )
+        except Exception as e:                                  # noqa: BLE001
+            raise SystemExit(f"probe failed:\n{type(e).__name__}: {e}")
+        text = next((b.text for b in r.content if b.type == "text"), "")
+        print(text)
+        print(f"\nusage: {r.usage}")
+        return 0
 
     try:
         batch = client.messages.batches.create(requests=requests)
@@ -371,7 +425,11 @@ def main() -> int:
     for result in client.messages.batches.results(batch.id):
         if result.result.type != "succeeded":
             errors += 1
-            print(f"  {result.custom_id}: {result.result.type}", file=sys.stderr)
+            # Print what actually went wrong. "errored" alone tells you
+            # nothing and costs a whole batch round-trip to re-discover.
+            detail = getattr(result.result, "error", None)
+            print(f"  {result.custom_id}: {result.result.type} "
+                  f"{detail!r}"[:400], file=sys.stderr)
             continue
         msg = result.result.message
         text = next((blk.text for blk in msg.content if blk.type == "text"), "")
@@ -386,10 +444,13 @@ def main() -> int:
         fh.write("# name\tcuisine_slug\tconfidence\n")
         fh.write("# REVIEW THIS before --emit-sql. Delete or correct any line.\n")
         for row in sorted(classified, key=lambda r: r["name"]):
-            slug = row["cuisine_slug"] or "null"
+            slug = row["cuisine_slug"]
+            if slug == UNKNOWN:
+                slug = "null"        # what --emit-sql skips
             fh.write(f"{row['name']}\t{slug}\t{row['confidence']}\n")
 
-    got = sum(1 for r in classified if r["cuisine_slug"])
+    got = sum(1 for r in classified
+              if r["cuisine_slug"] and r["cuisine_slug"] != UNKNOWN)
     print(f"\nwrote {args.out}: {len(classified)} names, "
           f"{got} with a cuisine ({100.0 * got / max(len(classified), 1):.0f}%), "
           f"{errors} failed requests")
