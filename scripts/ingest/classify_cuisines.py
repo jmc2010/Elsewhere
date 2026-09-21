@@ -41,10 +41,25 @@ Usage:
 import argparse
 import json
 import os
-import re
+import pathlib
 import subprocess
 import sys
 import time
+
+# Re-exec under the repo venv if the SDK is not importable here. Homebrew's
+# Python is externally managed, so the SDK can only live in a venv -- and
+# running this file by its path uses the shebang interpreter, which is not it.
+# Rather than rely on everyone remembering `.venv/bin/python`, find it.
+if "anthropic" not in sys.modules:
+    try:
+        import anthropic  # noqa: F401
+    except ModuleNotFoundError:
+        _venv = (pathlib.Path(__file__).resolve().parents[2]
+                 / ".venv" / "bin" / "python")
+        if _venv.exists() and not os.environ.get("_ELSEWHERE_REEXEC"):
+            os.environ["_ELSEWHERE_REEXEC"] = "1"
+            os.execv(str(_venv), [str(_venv), os.path.abspath(__file__),
+                                  *sys.argv[1:]])
 
 MODEL = "claude-opus-5"
 # Batch API is 50% of standard pricing and this is the definition of a job
@@ -328,7 +343,16 @@ def main() -> int:
             ),
         ))
 
-    batch = client.messages.batches.create(requests=requests)
+    try:
+        batch = client.messages.batches.create(requests=requests)
+    except anthropic.AuthenticationError:
+        raise SystemExit(
+            "ANTHROPIC_API_KEY was rejected. Keys start sk-ant- and come from\n"
+            "console.anthropic.com -> Settings -> API Keys. Note the API bills\n"
+            "separately from a Claude subscription: a Console account with no\n"
+            "credits fails here.")
+    except anthropic.BadRequestError as e:
+        raise SystemExit(f"the batch was rejected: {e}")
     print(f"\nbatch {batch.id} submitted; polling")
 
     while True:
