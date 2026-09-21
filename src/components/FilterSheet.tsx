@@ -26,6 +26,8 @@ export interface Filters {
   minRating: number | null;
   /** An unrated place is not a badly-rated one, so it is kept by default. */
   includeUnrated: boolean;
+  /** Layer 2, like minRating. A closed restaurant is useless at any rating. */
+  openNow: boolean;
 }
 
 export const DEFAULT_FILTERS: Filters = {
@@ -33,6 +35,7 @@ export const DEFAULT_FILTERS: Filters = {
   cuisines: [],
   minRating: null,
   includeUnrated: true,
+  openNow: false,
 };
 
 const RATINGS: { label: string; value: number | null }[] = [
@@ -130,6 +133,22 @@ export function FilterSheet(
             ))}
           </View>
 
+          <Text style={styles.section}>Open now?</Text>
+          <View style={styles.switchRow}>
+            <View style={styles.switchText}>
+              <Text style={styles.switchLabel}>Only places open now</Text>
+              <Text style={styles.switchHint}>
+                Hours come from Google. Places with no listing are kept —
+                they are not known to be closed.
+              </Text>
+            </View>
+            <Switch
+              value={draft.openNow}
+              onValueChange={(v) => setDraft((d) => ({ ...d, openNow: v }))}
+              trackColor={{ true: "#111", false: "#d6d6d6" }}
+            />
+          </View>
+
           <Text style={styles.section}>How good?</Text>
           <Text style={styles.hint}>
             Ratings come from Google and are fetched for the shortlist, so a
@@ -215,6 +234,7 @@ export function FilterSheet(
                   ? "Show everything"
                   : `Show ${draft.cuisines.length} selected`,
                 draft.minRating ? `${draft.minRating}+ stars` : null,
+                draft.openNow ? "open now" : null,
                 `within ${draft.radiusMiles} mi`,
               ].filter(Boolean).join(" · ")}
             </Text>

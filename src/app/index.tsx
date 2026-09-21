@@ -75,6 +75,11 @@ const MILES = 1609.344;
 const SHORTLIST = 10;
 const CANDIDATE_POOL = 25;
 
+/** Filters that can only be applied after hydration. */
+function hasLayer2(f: Filters): boolean {
+  return f.minRating !== null || f.openNow;
+}
+
 const PRICE: Record<string, string> = {
   PRICE_LEVEL_FREE: "Free",
   PRICE_LEVEL_INEXPENSIVE: "$",
@@ -149,7 +154,8 @@ export default function Home() {
         // make catalog_search raise, since a slug list that matches nothing is
         // a caller bug there.
         p_cuisines: filters.cuisines.length ? filters.cuisines : null,
-        p_limit: filters.minRating === null ? SHORTLIST : CANDIDATE_POOL,
+        // Widen to the pool only when a Layer 2 filter will cut it down.
+        p_limit: hasLayer2(filters) ? CANDIDATE_POOL : SHORTLIST,
       });
       if (error) throw error;
       return (data ?? []) as CatalogPlace[];
@@ -259,21 +265,38 @@ export default function Home() {
 
   // Layer 2 filtering, applied after hydration because that is the only point
   // at which we hold a rating.
-  const ratingOf = (id: string) => liveById.get(id)?.live?.rating;
-  const shown = filters.minRating === null
+  const shown = !hasLayer2(filters)
     ? catalog.data
     : catalog.data
       .filter((p) => {
-        const r = ratingOf(p.place_id);
-        if (r === undefined) return filters.includeUnrated;
-        return r >= filters.minRating!;
+        const live = liveById.get(p.place_id)?.live;
+
+        if (filters.minRating !== null) {
+          const r = live?.rating;
+          // No rating is not a bad rating.
+          if (r === undefined) {
+            if (!filters.includeUnrated) return false;
+          } else if (r < filters.minRating) {
+            return false;
+          }
+        }
+
+        if (filters.openNow) {
+          const open = live?.regularOpeningHours?.openNow;
+          // Unknown hours are kept: a place with no Google listing is not
+          // known to be closed, and dropping it would again narrow the app
+          // to "restaurants Google knows well".
+          if (open === false) return false;
+        }
+
+        return true;
       })
       .slice(0, SHORTLIST);
 
   // With a rating floor set, rendering before hydration lands would show
   // cards that are about to disappear. A brief wait beats a list that
   // shrinks under the reader.
-  if (filters.minRating !== null && missing.length > 0 && hydration.isFetching) {
+  if (hasLayer2(filters) && missing.length > 0 && hydration.isFetching) {
     return (
       <SafeAreaView style={styles.screen}>
         <View style={styles.centered}>
@@ -327,6 +350,7 @@ export default function Home() {
             ? `Nothing within ${filters.radiusMiles} miles`
             : `${shown.length} within ${filters.radiusMiles} miles`}
           {filters.minRating !== null ? ` · ${filters.minRating}+ stars` : ""}
+          {filters.openNow ? " · open now" : ""}
           {missing.length > 0 && hydration.isFetching
             ? " · checking ratings…"
             : ""}
@@ -346,8 +370,8 @@ export default function Home() {
         )}
         ListEmptyComponent={
           <Text style={styles.body}>
-            {filters.minRating !== null
-              ? `Nothing here is rated ${filters.minRating}+. Try a lower bar, a wider radius, or turning on unrated places.`
+            {hasLayer2(filters)
+              ? "Nothing matched. Try a wider radius, a lower star bar, or turning off open now."
               : "Nothing matched. Try a wider radius or fewer cuisines."}
           </Text>
         }
