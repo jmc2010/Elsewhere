@@ -66,11 +66,14 @@ interface HydrateResponse {
 
 const MILES = 1609.344;
 
-// Hydrate exactly what is shown. The spec's 25-candidate pool exists so that
-// Layer 2 filters (rating floor, open now, price) can cut it to ~10 — until
-// the filter sheet exists there is nothing to cut with, so fetching 25 would
-// buy 15 Google calls for cards nobody sees.
+// Spec §5.1: Layer 1 and Layer 3 narrow to ~25 candidates, hydration fills
+// them in, Layer 2 filters cut that to the ~10 rendered.
+//
+// With no Layer 2 filter there is nothing to cut with, so asking for 25 would
+// buy 15 Google calls for cards nobody sees. The pool is only widened when a
+// rating floor is actually set.
 const SHORTLIST = 10;
+const CANDIDATE_POOL = 25;
 
 const PRICE: Record<string, string> = {
   PRICE_LEVEL_FREE: "Free",
@@ -146,7 +149,7 @@ export default function Home() {
         // make catalog_search raise, since a slug list that matches nothing is
         // a caller bug there.
         p_cuisines: filters.cuisines.length ? filters.cuisines : null,
-        p_limit: SHORTLIST,
+        p_limit: filters.minRating === null ? SHORTLIST : CANDIDATE_POOL,
       });
       if (error) throw error;
       return (data ?? []) as CatalogPlace[];
@@ -254,6 +257,33 @@ export default function Home() {
     return <Message title="Search failed" body={catalog.error.message} />;
   }
 
+  // Layer 2 filtering, applied after hydration because that is the only point
+  // at which we hold a rating.
+  const ratingOf = (id: string) => liveById.get(id)?.live?.rating;
+  const shown = filters.minRating === null
+    ? catalog.data
+    : catalog.data
+      .filter((p) => {
+        const r = ratingOf(p.place_id);
+        if (r === undefined) return filters.includeUnrated;
+        return r >= filters.minRating!;
+      })
+      .slice(0, SHORTLIST);
+
+  // With a rating floor set, rendering before hydration lands would show
+  // cards that are about to disappear. A brief wait beats a list that
+  // shrinks under the reader.
+  if (filters.minRating !== null && missing.length > 0 && hydration.isFetching) {
+    return (
+      <SafeAreaView style={styles.screen}>
+        <View style={styles.centered}>
+          <ActivityIndicator />
+          <Text style={styles.bodyQuiet}>Checking ratings…</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.screen}>
       <View style={styles.header}>
@@ -293,9 +323,10 @@ export default function Home() {
           </Text>
         )}
         <Text style={styles.bodyQuiet}>
-          {catalog.data.length === 0
+          {shown.length === 0
             ? `Nothing within ${filters.radiusMiles} miles`
-            : `Nearest ${catalog.data.length} within ${filters.radiusMiles} miles`}
+            : `${shown.length} within ${filters.radiusMiles} miles`}
+          {filters.minRating !== null ? ` · ${filters.minRating}+ stars` : ""}
           {missing.length > 0 && hydration.isFetching
             ? " · checking ratings…"
             : ""}
@@ -307,7 +338,7 @@ export default function Home() {
         )}
       </View>
       <FlatList
-        data={catalog.data}
+        data={shown}
         keyExtractor={(p) => p.place_id}
         contentContainerStyle={styles.list}
         renderItem={({ item }) => (
@@ -315,7 +346,9 @@ export default function Home() {
         )}
         ListEmptyComponent={
           <Text style={styles.body}>
-            Nothing matched. Try a wider radius or fewer cuisines.
+            {filters.minRating !== null
+              ? `Nothing here is rated ${filters.minRating}+. Try a lower bar, a wider radius, or turning on unrated places.`
+              : "Nothing matched. Try a wider radius or fewer cuisines."}
           </Text>
         }
       />
@@ -356,7 +389,7 @@ function Card(
       {place.cuisines.length > 0 && (
         <Text style={styles.cardCuisine}>{place.cuisines.join(" · ")}</Text>
       )}
-      {live && (
+      {live ? (
         <View style={styles.liveRow}>
           {live.rating !== undefined && (
             <Text style={styles.rating}>
@@ -373,6 +406,12 @@ function Card(
             </Text>
           )}
         </View>
+      ) : (
+        // Under a rating filter this card is here because "no rating" was
+        // allowed, so say why rather than leaving a suspicious gap.
+        hydrated?.live_status === "unresolved"
+          ? <Text style={styles.noRating}>No rating available</Text>
+          : null
       )}
     </View>
   );
@@ -448,4 +487,5 @@ const styles = StyleSheet.create({
   chip: { fontSize: 14, color: "#6b6b6b" },
   open: { fontSize: 14, color: "#1b7a3d", fontWeight: "600" },
   closed: { fontSize: 14, color: "#8a8a8a" },
+  noRating: { fontSize: 13, color: "#a5a5a5", marginTop: 5, fontStyle: "italic" },
 });

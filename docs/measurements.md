@@ -263,3 +263,41 @@ permanent for the session.
 The metric found it on its first real day, which is the argument for §5's
 insistence that calls-per-session be instrumented **from the first hydration
 call, not after launch**. Nothing about the code looked wrong; the number did.
+
+
+---
+
+## The rating filter is what makes the 25-candidate pool real
+
+Spec §5.1: Layer 1 and Layer 3 narrow to ~25, hydration fills them in, Layer 2
+filters cut that to the ~10 rendered. Until a Layer 2 filter existed there was
+nothing to cut with, so the app asked for exactly the 10 it showed — asking
+for 25 would have bought 15 Google calls for cards nobody sees.
+
+A rating floor changes that, and the cost is real: **25 hydrations instead of
+10** on a cold search, only while a floor is set. Per-place caching (above)
+makes the second search in an area nearly free, which is what makes this
+affordable at all.
+
+### Unrated places are included by default
+
+About one place in four never resolves to a Google listing, and those skew
+heavily to rural independents — the population the catalog exists to surface.
+
+Excluding them under a rating filter would quietly reduce the app to
+"restaurants Google knows well" at exactly the moment someone is being
+selective. **An unrated place is not a badly-rated place.** They are kept by
+default, labelled "No rating available" on the card so the list stays honest,
+and a switch in the filter sheet turns them off for anyone who wants a strict
+reading of "4+ stars".
+
+This is the same asymmetry as the chain-closure inference: Google's silence
+means different things for a chain and for a rural independent, and treating
+those the same is what loses the places that matter.
+
+### One UX consequence
+
+With a floor set, the list waits for hydration instead of rendering from the
+catalog first. Rendering immediately would show cards that are about to
+vanish, and a list that shrinks under the reader is worse than a brief wait.
+Without a floor the old behaviour stands: catalog instantly, ratings after.

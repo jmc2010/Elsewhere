@@ -12,7 +12,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import {
-  ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, View,
+  ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Switch, Text,
+  View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -21,9 +22,25 @@ import { supabase } from "@/lib/supabase";
 export interface Filters {
   radiusMiles: number;
   cuisines: string[];
+  /** Layer 2. Applied after hydration, not in catalog_search. */
+  minRating: number | null;
+  /** An unrated place is not a badly-rated one, so it is kept by default. */
+  includeUnrated: boolean;
 }
 
-export const DEFAULT_FILTERS: Filters = { radiusMiles: 20, cuisines: [] };
+export const DEFAULT_FILTERS: Filters = {
+  radiusMiles: 20,
+  cuisines: [],
+  minRating: null,
+  includeUnrated: true,
+};
+
+const RATINGS: { label: string; value: number | null }[] = [
+  { label: "Any", value: null },
+  { label: "3.5+", value: 3.5 },
+  { label: "4.0+", value: 4.0 },
+  { label: "4.5+", value: 4.5 },
+];
 
 // Deliberately coarse. A slider invites fiddling, and the decision window is
 // ~90 seconds (spec §3) -- four taps covers the real range from "in town" to
@@ -113,6 +130,51 @@ export function FilterSheet(
             ))}
           </View>
 
+          <Text style={styles.section}>How good?</Text>
+          <Text style={styles.hint}>
+            Ratings come from Google and are fetched for the shortlist, so a
+            rating filter costs a little more than the others.
+          </Text>
+          <View style={styles.row}>
+            {RATINGS.map((r) => {
+              const on = draft.minRating === r.value;
+              return (
+                <Pressable
+                  key={r.label}
+                  onPress={() => setDraft((d) => ({ ...d, minRating: r.value }))}
+                  style={[styles.pill, on && styles.pillOn]}
+                >
+                  <Text style={[styles.pillText, on && styles.pillTextOn]}>
+                    {r.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+
+          {draft.minRating !== null && (
+            // About one place in four has no Google listing at all, and those
+            // skew to rural independents -- the population this catalog exists
+            // to surface. Excluding them would quietly narrow the app to
+            // "restaurants Google knows well" exactly when someone is being
+            // selective, so the default keeps them.
+            <View style={styles.switchRow}>
+              <View style={styles.switchText}>
+                <Text style={styles.switchLabel}>Include unrated places</Text>
+                <Text style={styles.switchHint}>
+                  Some places have no Google listing. No rating isn&apos;t a bad
+                  rating.
+                </Text>
+              </View>
+              <Switch
+                value={draft.includeUnrated}
+                onValueChange={(v) =>
+                  setDraft((d) => ({ ...d, includeUnrated: v }))}
+                trackColor={{ true: "#111", false: "#d6d6d6" }}
+              />
+            </View>
+          )}
+
           <Text style={styles.section}>What kind?</Text>
           <Text style={styles.hint}>
             Nothing selected means everything.
@@ -148,9 +210,13 @@ export function FilterSheet(
             }}
           >
             <Text style={styles.applyText}>
-              {draft.cuisines.length === 0
-                ? `Show everything within ${draft.radiusMiles} mi`
-                : `Show ${draft.cuisines.length} selected within ${draft.radiusMiles} mi`}
+              {[
+                draft.cuisines.length === 0
+                  ? "Show everything"
+                  : `Show ${draft.cuisines.length} selected`,
+                draft.minRating ? `${draft.minRating}+ stars` : null,
+                `within ${draft.radiusMiles} mi`,
+              ].filter(Boolean).join(" · ")}
             </Text>
           </Pressable>
         </View>
@@ -174,6 +240,13 @@ const styles = StyleSheet.create({
   row: { flexDirection: "row", gap: 8 },
   wrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   loading: { marginTop: 16 },
+  switchRow: {
+    flexDirection: "row", alignItems: "center", gap: 14, marginTop: 6,
+    paddingVertical: 10,
+  },
+  switchText: { flexShrink: 1, gap: 2 },
+  switchLabel: { fontSize: 16, color: "#111" },
+  switchHint: { fontSize: 13, color: "#8a8a8a", lineHeight: 18 },
   pill: {
     paddingVertical: 10, paddingHorizontal: 14, borderRadius: 20,
     backgroundColor: "#f0f0f0",
