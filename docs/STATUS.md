@@ -6,7 +6,17 @@ file only covers **where we are right now**.
 
 **Phase 0 — Foundation. COMPLETE, 2026-09-20.** Exit criteria was catalog
 queryable by radius + cuisine in under 200ms; measured at **54ms** on Micro.
-See [`docs/measurements.md`](measurements.md). Next phase is 1 — Shortlist.
+See [`docs/measurements.md`](measurements.md).
+
+**Phase 1 — Shortlist. COMPLETE, 2026-09-21.** Filter sheet (cuisine,
+distance, stars, open now), a settable search origin, a hydrated shortlist,
+and Surprise Me. A real "where to eat" query returns ten cards with live
+ratings at about ten Google calls per session.
+
+**Phase 2 — Memory** is next: auth, visits, ratings, vetoes, recency decay,
+Surprise Me's real weighting, and corrections (§4.1). Surprise Me exists but
+three of its four weight terms are neutral until Layer 3 has data —
+`src/components/SurpriseReveal.tsx` is where they land.
 
 ## Environment
 
