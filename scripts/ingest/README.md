@@ -109,3 +109,35 @@ kept in staging deliberately, so the extract stays inspectable — but they must
 never reach the catalog, because every one of them is a wasted Google
 hydration call against a restaurant that no longer exists. North Texas has
 ~550.
+
+
+## Step 4 — Classify the names that have no cuisine
+
+After the category map (step 3), ~4,300 places still have no cuisine: their
+Overture category carries none and they are not known chains. Names carry the
+signal, so this is the offline Claude pass the spec calls for.
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install anthropic   # one-time
+export ANTHROPIC_API_KEY=...
+
+.venv/bin/python scripts/ingest/classify_cuisines.py --dry-run
+.venv/bin/python scripts/ingest/classify_cuisines.py --out cuisine_names.tsv
+```
+
+Homebrew's Python is externally managed, so the venv is not optional.
+
+~$1.57 on the Batch API. It writes a TSV and touches nothing else. **Read it**,
+correct or delete any line, then:
+
+```bash
+.venv/bin/python scripts/ingest/classify_cuisines.py --emit-sql cuisine_names.tsv \
+  > supabase/migrations/<timestamp>_name_cuisines.sql
+```
+
+The number to check first is the **null rate**. The set contains plenty of
+genuine noise -- `1 Mico 12 Llp`, `129 Medi Inc`, `1420 Plaza Place Partners,
+L.l.c` -- so a healthy result has a meaningful fraction of nulls. If nearly
+everything came back with a cuisine, the prompt is guessing, and a wrong
+cuisine is worse than none: it puts a place in a filter it does not belong in,
+which a user notices far less readily than an absence.

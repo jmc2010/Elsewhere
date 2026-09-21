@@ -23,6 +23,12 @@ OUTPUT IS REVIEWED BEFORE IT IS APPLIED
     The run writes a TSV. Nothing touches the database. `--emit-sql` turns a
     reviewed TSV into a migration. That ordering is the point.
 
+Requires the Anthropic SDK. Homebrew's Python is externally managed (PEP 668)
+so a plain `pip install` is refused; the repo carries a venv:
+
+    python3 -m venv .venv && .venv/bin/pip install anthropic
+    .venv/bin/python scripts/ingest/classify_cuisines.py ...
+
 Usage:
     export ELSEWHERE_PG_URL=...
     export ANTHROPIC_API_KEY=...
