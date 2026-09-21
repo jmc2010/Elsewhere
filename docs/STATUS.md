@@ -100,8 +100,11 @@ creates. Run it before trusting anything in this file.
 - **Shortlist hydration working on a real device**, 2026-09-20. Ten cards
   with live ratings, price and open-now, filling in after the catalog list
   renders. Layer 1 → Layer 2 → screen, end to end.
-- **Filter sheet** — cuisine by group, four distance presets. Committed but
-  **not in the installed APK**; that build predates it.
+- **Filter sheet working on a device**, 2026-09-20. Cuisine by group and
+  distance presets, against the live catalog. Judged a good list.
+- **OTA updates live.** JS changes now ship with
+  `npx eas update --branch preview`; rebuilds are only needed for native
+  changes.
 - **Expo app scaffold** — SDK 57, RN 0.86, React 19, expo-router, TypeScript
   strict. iOS (3.3MB) and Android (3.6MB) bundles both build.
 - **Running on a real device, 2026-09-20.** Home screen returns the nearest 25
