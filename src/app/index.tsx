@@ -19,6 +19,9 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import {
+  DEFAULT_FILTERS, FilterSheet, Filters,
+} from "@/components/FilterSheet";
 import { ensureSession, supabase } from "@/lib/supabase";
 
 /** Mirrors catalog_search()'s RETURNS TABLE. */
@@ -61,7 +64,6 @@ interface HydrateResponse {
 }
 
 const MILES = 1609.344;
-const DEFAULT_RADIUS_MI = 20;
 
 // Hydrate exactly what is shown. The spec's 25-candidate pool exists so that
 // Layer 2 filters (rating floor, open now, price) can cut it to ~10 — until
@@ -85,6 +87,8 @@ export default function Home() {
   const [sessionReady, setSessionReady] = useState(false);
   const [sessionError, setSessionError] = useState<string | null>(null);
   // One id per app run, so calls-per-session is measurable (spec §5).
+  const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [sessionId] = useState(
     () => `app-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
   );
@@ -121,13 +125,17 @@ export default function Home() {
   }, [permission]);
 
   const catalog = useQuery({
-    queryKey: ["catalog_search", coords?.lat, coords?.lon],
+    queryKey: ["catalog_search", coords?.lat, coords?.lon, filters],
     enabled: sessionReady && coords !== null,
     queryFn: async (): Promise<CatalogPlace[]> => {
       const { data, error } = await supabase.rpc("catalog_search", {
         p_lat: coords!.lat,
         p_lon: coords!.lon,
-        p_radius_meters: DEFAULT_RADIUS_MI * MILES,
+        p_radius_meters: filters.radiusMiles * MILES,
+        // Empty means no cuisine filter at all. Sending an empty array would
+        // make catalog_search raise, since a slug list that matches nothing is
+        // a caller bug there.
+        p_cuisines: filters.cuisines.length ? filters.cuisines : null,
         p_limit: SHORTLIST,
       });
       if (error) throw error;
@@ -210,10 +218,25 @@ export default function Home() {
   return (
     <SafeAreaView style={styles.screen}>
       <View style={styles.header}>
-        <Text style={styles.title}>Where to tonight?</Text>
+        <View style={styles.headerTop}>
+          <Text style={styles.title}>Where to tonight?</Text>
+          <Pressable
+            onPress={() => setFiltersOpen(true)}
+            style={styles.filterButton}
+            hitSlop={10}
+          >
+            <Text style={styles.filterButtonText}>
+              Filter{filters.cuisines.length ? ` (${filters.cuisines.length})` : ""}
+            </Text>
+          </Pressable>
+        </View>
         <Text style={styles.bodyQuiet}>
-          Nearest {catalog.data.length} within {DEFAULT_RADIUS_MI} miles
-          {hydration.isPending ? " · checking ratings…" : ""}
+          {catalog.data.length === 0
+            ? `Nothing within ${filters.radiusMiles} miles`
+            : `Nearest ${catalog.data.length} within ${filters.radiusMiles} miles`}
+          {hydration.isPending && catalog.data.length > 0
+            ? " · checking ratings…"
+            : ""}
         </Text>
         {hydration.data?.quota.degraded && (
           <Text style={styles.warn}>
@@ -228,6 +251,17 @@ export default function Home() {
         renderItem={({ item }) => (
           <Card place={item} hydrated={liveById.get(item.place_id)} />
         )}
+        ListEmptyComponent={
+          <Text style={styles.body}>
+            Nothing matched. Try a wider radius or fewer cuisines.
+          </Text>
+        }
+      />
+      <FilterSheet
+        visible={filtersOpen}
+        filters={filters}
+        onApply={setFilters}
+        onClose={() => setFiltersOpen(false)}
       />
     </SafeAreaView>
   );
@@ -290,6 +324,15 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: "#fff" },
   centered: { flex: 1, justifyContent: "center", padding: 28, gap: 14 },
   header: { paddingHorizontal: 20, paddingTop: 12, paddingBottom: 8, gap: 4 },
+  headerTop: {
+    flexDirection: "row", alignItems: "center",
+    justifyContent: "space-between",
+  },
+  filterButton: {
+    paddingVertical: 7, paddingHorizontal: 14, borderRadius: 18,
+    backgroundColor: "#f0f0f0",
+  },
+  filterButtonText: { fontSize: 15, fontWeight: "600" },
   title: { fontSize: 30, fontWeight: "700", letterSpacing: -0.5 },
   body: { fontSize: 16, lineHeight: 23 },
   bodyQuiet: { fontSize: 14, color: "#6b6b6b", lineHeight: 20 },
