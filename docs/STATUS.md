@@ -91,8 +91,11 @@ creates. Run it before trusting anything in this file.
   limit, `session_id` on `google_api_usage`, the two permitted Google writers,
   and `places_coords` for the proxy. All revoked from `public`/`authenticated`
   and granted only to `service_role`.
-- **`places-proxy` edge function** — written, typechecks, **not yet
-  deployed**. The only path to Google. Untested against the live API.
+- **`places-proxy` edge function** — **deployed and working**, 2026-09-20.
+  First live hydration: Tia's Tex-Mex 4.8★ (287), Subway 3.7★ (75), both with
+  price, business status and open-now. Quota recorded correctly.
+- **0015 resolution retry** — written, **not yet applied**. Makes a failed
+  resolution retryable after 30 days.
 - **Expo app scaffold** — SDK 57, RN 0.86, React 19, expo-router, TypeScript
   strict. iOS (3.3MB) and Android (3.6MB) bundles both build.
 - **Running on a real device, 2026-09-20.** Home screen returns the nearest 25
@@ -181,6 +184,23 @@ friction, which is the competitive point against Zest's Plaid wall (§10).
 **Then the rest of Phase 1:** filter sheet, shortlist hydration through
 `places-proxy`, place detail. Exit criteria is a real "where to eat" query
 returning 10 good cards under budget.
+
+### What the first live hydration found
+
+Two bugs, neither visible without real calls.
+
+- **Place Details and Text Search field masks are not interchangeable.**
+  `searchText` returns `{places: [...]}` so its mask is prefixed
+  `places.rating`; Place Details returns a single Place and needs plain
+  `rating`. The shortlist mask carried the prefix, so every hydration
+  returned 400 and surfaced as `live_status: error` — which reads like a key
+  or permissions problem and sent the search the wrong way.
+- **A failed resolution was permanent.** `google_resolution_failed` was
+  terminal, so Valley View's Dairy Queen would have stayed catalog-only
+  forever after one bad lookup — despite `measurements.md` saying explicitly
+  that coordinate drift makes failures worth retrying. 0015 adds a 30-day
+  window. The quota also charged for places that short-circuit without
+  calling Google; fixed alongside.
 
 ### What the first hand-audit found
 

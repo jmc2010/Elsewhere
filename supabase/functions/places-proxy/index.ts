@@ -74,6 +74,12 @@ const SAME_BUILDING_M = 30;   // coordinates alone settle it
 const MAX_DISTANCE_M = 250;
 const MIN_NAME_SIMILARITY = 0.55;
 
+// A failed resolution is retried after this long, not never. Coordinates
+// improve between Overture releases, and a place absent from Google today may
+// be listed next month. Long enough that a genuine absence is not re-paid for
+// on every hydration; short enough that a monthly reingest gets a fresh look.
+const RESOLUTION_RETRY_DAYS = 30;
+
 const NAME_NOISE = new Set([
   "the", "a", "of", "and", "restaurant", "cafe", "bar", "grill", "co", "inc",
   "llc", "shop", "kitchen",
@@ -144,8 +150,17 @@ interface CatalogPlace {
   lon: number;
   google_place_id: string | null;
   google_resolution_failed: boolean;
+  google_resolution_attempted_at: string | null;
   /** Other catalog places within 30m; 0 means the address is unshared. */
   colocated_count: number;
+}
+
+/** A previously-failed place becomes eligible again after the retry window. */
+function dueForRetry(p: CatalogPlace): boolean {
+  if (!p.google_resolution_failed) return false;
+  if (!p.google_resolution_attempted_at) return true;
+  const age = Date.now() - Date.parse(p.google_resolution_attempted_at);
+  return age > RESOLUTION_RETRY_DAYS * 86_400_000;
 }
 
 /**
@@ -307,7 +322,10 @@ Deno.serve(async (req: Request) => {
 
   const { data: rows, error: rowsErr } = await db
     .from("places")
-    .select("id, name, google_place_id, google_resolution_failed, colocated_count")
+    // Must stay one string literal: supabase-js infers the row type from the
+    // column list statically, and a concatenated expression degrades it to
+    // GenericStringError.
+    .select("id, name, google_place_id, google_resolution_failed, google_resolution_attempted_at, colocated_count")
     .in("id", ids)
     .eq("permanently_closed", false);
   if (rowsErr) return json({ error: rowsErr.message }, 500);
@@ -330,15 +348,22 @@ Deno.serve(async (req: Request) => {
     lon: coordById.get(r.id)?.lon ?? 0,
     google_place_id: r.google_place_id,
     google_resolution_failed: r.google_resolution_failed,
+    google_resolution_attempted_at: r.google_resolution_attempted_at,
     colocated_count: r.colocated_count ?? 0,
   }));
 
   // Budget the batch BEFORE spending any of it. A place needing resolution
   // costs two calls (searchText + details); an already-resolved one costs one.
   const needsResolution = places.filter((p) =>
-    !p.google_place_id && !p.google_resolution_failed
+    !p.google_place_id && (!p.google_resolution_failed || dueForRetry(p))
   );
-  const requested = places.length + needsResolution.length;
+  // A place that will short-circuit as `unresolved` makes no Google call, so
+  // it must not be budgeted for one. Counting it charged the user for work
+  // that never happened.
+  const willCall = places.filter((p) =>
+    p.google_place_id || !p.google_resolution_failed || dueForRetry(p)
+  );
+  const requested = willCall.length + needsResolution.length;
 
   const sku = action === "detail"
     ? "places.details.enterprise_atmosphere"
@@ -365,7 +390,14 @@ Deno.serve(async (req: Request) => {
   let budget = granted;
   const results = await Promise.all(places.map(async (p) => {
     const base = { place_id: p.id, name: p.name };
-    const cost = (!p.google_place_id && !p.google_resolution_failed) ? 2 : 1;
+    const retry = dueForRetry(p);
+    if (!p.google_place_id && p.google_resolution_failed && !retry) {
+      // Known unresolvable and not yet due another look. Costs nothing.
+      return { ...base, live: null, live_status: "unresolved" as LiveStatus };
+    }
+    const cost = (!p.google_place_id && (!p.google_resolution_failed || retry))
+      ? 2
+      : 1;
     if (budget < cost) {
       return { ...base, live: null, live_status: "quota_exceeded" as LiveStatus };
     }
@@ -374,9 +406,6 @@ Deno.serve(async (req: Request) => {
     try {
       let gid = p.google_place_id;
       if (!gid) {
-        if (p.google_resolution_failed) {
-          return { ...base, live: null, live_status: "unresolved" as LiveStatus };
-        }
         gid = await resolvePlaceId(key, p);
         // place_id is one of exactly two Google values we may persist, and
         // this is its only writer.
