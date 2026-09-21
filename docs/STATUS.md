@@ -100,6 +100,11 @@ creates. Run it before trusting anything in this file.
 - **Shortlist hydration working on a real device**, 2026-09-20. Ten cards
   with live ratings, price and open-now, filling in after the catalog list
   renders. Layer 1 → Layer 2 → screen, end to end.
+- **0020 catalog_localities** — written, **not yet applied**. Towns with 5+
+  open places, with centroid and distance, nearest first. 47ms. Powers
+  "search somewhere I am not yet".
+- **Location picker** — the search origin is settable: Near me, or a town you
+  are travelling to. Mockup approved 2026-09-21. Ships over OTA.
 - **Filter sheet working on a device**, 2026-09-20. Cuisine by group and
   distance presets, against the live catalog. Judged a good list.
 - **OTA updates live.** JS changes now ship with

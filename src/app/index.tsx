@@ -22,6 +22,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import {
   DEFAULT_FILTERS, FilterSheet, Filters,
 } from "@/components/FilterSheet";
+import { LocationPicker, Origin } from "@/components/LocationPicker";
 import { ensureSession, supabase } from "@/lib/supabase";
 
 /** Mirrors catalog_search()'s RETURNS TABLE. */
@@ -89,6 +90,9 @@ export default function Home() {
   // One id per app run, so calls-per-session is measurable (spec §5).
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
   const [filtersOpen, setFiltersOpen] = useState(false);
+  // Where the search starts from: the device, or a town you are travelling to.
+  const [origin, setOrigin] = useState<Origin>({ kind: "me" });
+  const [originOpen, setOriginOpen] = useState(false);
   const [sessionId] = useState(
     () => `app-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
   );
@@ -124,13 +128,19 @@ export default function Home() {
       .catch(() => setPermission("denied"));
   }, [permission]);
 
+  // `coords` stays the device's real position so the town list can be sorted
+  // by where the user actually is. `searchFrom` is what the shortlist uses.
+  const searchFrom = origin.kind === "town"
+    ? { lat: origin.lat, lon: origin.lon }
+    : coords;
+
   const catalog = useQuery({
-    queryKey: ["catalog_search", coords?.lat, coords?.lon, filters],
-    enabled: sessionReady && coords !== null,
+    queryKey: ["catalog_search", searchFrom?.lat, searchFrom?.lon, filters],
+    enabled: sessionReady && searchFrom !== null,
     queryFn: async (): Promise<CatalogPlace[]> => {
       const { data, error } = await supabase.rpc("catalog_search", {
-        p_lat: coords!.lat,
-        p_lon: coords!.lon,
+        p_lat: searchFrom!.lat,
+        p_lon: searchFrom!.lon,
         p_radius_meters: filters.radiusMiles * MILES,
         // Empty means no cuisine filter at all. Sending an empty array would
         // make catalog_search raise, since a slug list that matches nothing is
@@ -229,7 +239,7 @@ export default function Home() {
     );
   }
 
-  if (!sessionReady || catalog.isPending || !coords) {
+  if (!sessionReady || catalog.isPending || !searchFrom) {
     return (
       <SafeAreaView style={styles.screen}>
         <View style={styles.centered}>
@@ -247,8 +257,22 @@ export default function Home() {
   return (
     <SafeAreaView style={styles.screen}>
       <View style={styles.header}>
+        <Text style={styles.title}>Where to tonight?</Text>
         <View style={styles.headerTop}>
-          <Text style={styles.title}>Where to tonight?</Text>
+          <Pressable
+            onPress={() => setOriginOpen(true)}
+            style={[styles.originChip, origin.kind === "town" && styles.originChipOn]}
+            hitSlop={10}
+          >
+            <Text
+              style={[
+                styles.originText,
+                origin.kind === "town" && styles.originTextOn,
+              ]}
+            >
+              {origin.kind === "town" ? origin.locality : "Near me"} ▾
+            </Text>
+          </Pressable>
           <Pressable
             onPress={() => setFiltersOpen(true)}
             style={styles.filterButton}
@@ -259,6 +283,15 @@ export default function Home() {
             </Text>
           </Pressable>
         </View>
+        {origin.kind === "town" && (
+          // "0.2 mi" is actively misleading when the user is 10 miles away.
+          <Text style={styles.originNote}>
+            Distances are from {origin.locality}
+            {coords
+              ? ` — ${(haversineMiles(coords, origin) ).toFixed(0)} miles from you`
+              : ""}.
+          </Text>
+        )}
         <Text style={styles.bodyQuiet}>
           {catalog.data.length === 0
             ? `Nothing within ${filters.radiusMiles} miles`
@@ -285,6 +318,13 @@ export default function Home() {
             Nothing matched. Try a wider radius or fewer cuisines.
           </Text>
         }
+      />
+      <LocationPicker
+        visible={originOpen}
+        origin={origin}
+        deviceCoords={coords}
+        onPick={setOrigin}
+        onClose={() => setOriginOpen(false)}
       />
       <FilterSheet
         visible={filtersOpen}
@@ -338,6 +378,18 @@ function Card(
   );
 }
 
+/** Straight-line miles, for the "N miles from you" note only. */
+function haversineMiles(
+  a: { lat: number; lon: number },
+  b: { lat: number; lon: number },
+): number {
+  const R = 3958.8, rad = Math.PI / 180;
+  const dp = (b.lat - a.lat) * rad, dl = (b.lon - a.lon) * rad;
+  const h = Math.sin(dp / 2) ** 2 +
+    Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dl / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
 function Message({ title, body }: { title: string; body: string }) {
   return (
     <SafeAreaView style={styles.screen}>
@@ -362,6 +414,18 @@ const styles = StyleSheet.create({
     backgroundColor: "#f0f0f0",
   },
   filterButtonText: { fontSize: 15, fontWeight: "600" },
+  originChip: {
+    paddingVertical: 8, paddingHorizontal: 14, borderRadius: 20,
+    borderWidth: 1, borderColor: "#dcdcdc",
+  },
+  originChipOn: { backgroundColor: "#111", borderColor: "#111" },
+  originText: { fontSize: 15, fontWeight: "600", color: "#111" },
+  originTextOn: { color: "#fff" },
+  originNote: {
+    fontSize: 13, color: "#a6642a", backgroundColor: "#fdf4e8",
+    paddingVertical: 8, paddingHorizontal: 12, borderRadius: 9,
+    lineHeight: 18, marginTop: 2,
+  },
   title: { fontSize: 30, fontWeight: "700", letterSpacing: -0.5 },
   body: { fontSize: 16, lineHeight: 23 },
   bodyQuiet: { fontSize: 14, color: "#6b6b6b", lineHeight: 20 },
