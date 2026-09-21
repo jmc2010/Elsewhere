@@ -27,12 +27,20 @@ LON=-97.1614
 say() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 
 say "1. anonymous sign-in"
-TOKEN=$(curl -s -X POST "$URL/auth/v1/signup" \
-  -H "apikey: $KEY" -H "Content-Type: application/json" \
-  -d '{}' | python3 -c 'import sys,json; print(json.load(sys.stdin).get("access_token",""))')
+# supabase-js signInAnonymously() posts to /auth/v1/signup with an empty body.
+AUTH=$(curl -s -X POST "$URL/auth/v1/signup" \
+  -H "apikey: $KEY" -H "Content-Type: application/json" -d '{}')
+TOKEN=$(printf '%s' "$AUTH" | python3 -c 'import sys,json
+try:
+    print(json.load(sys.stdin).get("access_token","") or "")
+except Exception:
+    print("")')
 if [ -z "$TOKEN" ]; then
-  echo "no access_token returned. Is 'Anonymous sign-ins' enabled in" >&2
-  echo "Authentication -> Providers?" >&2
+  echo "no access_token returned. Supabase said:" >&2
+  printf '%s\n' "$AUTH" | head -c 600 >&2
+  echo >&2
+  echo "If it mentions anonymous sign-ins being disabled, enable them at" >&2
+  echo "Authentication -> Sign In / Providers." >&2
   exit 1
 fi
 echo "   got a user token"
@@ -56,30 +64,4 @@ curl -s -X POST "$URL/functions/v1/places-proxy" \
   -H "apikey: $KEY" -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d "{\"action\":\"hydrate\",\"session_id\":\"test-$(date +%s)\",\"place_ids\":$IDS}" \
-  | python3 -c '
-import sys, json
-r = json.load(sys.stdin)
-if "error" in r:
-    print("ERROR:", r["error"]); sys.exit(1)
-q = r.get("quota", {})
-print(f"quota   granted={q.get(\"granted\")} used_today={q.get(\"used_today\")}"
-      f" limit={q.get(\"daily_limit\")} degraded={q.get(\"degraded\")}")
-print(f"attribution: {r.get(\"attribution\")}")
-print()
-for p in r.get("places", []):
-    live = p.get("live") or {}
-    bits = []
-    if live.get("rating") is not None:
-        bits.append(f"{live[\"rating\"]}* ({live.get(\"userRatingCount\")})")
-    if live.get("priceLevel"):        bits.append(str(live["priceLevel"]))
-    if live.get("businessStatus"):    bits.append(str(live["businessStatus"]))
-    print(f"  {p[\"live_status\"]:16} {p[\"name\"][:34]:34} {\"  \".join(bits)}")
-print()
-ok = sum(1 for p in r.get("places", []) if p["live_status"] == "ok")
-print(f"hydrated {ok}/{len(r.get(\"places\", []))}")
-print()
-print("live_status meanings:")
-print("  ok             hydrated")
-print("  unresolved     no Google place_id; render catalog-only. ~27% expected.")
-print("  quota_exceeded budget ran out mid-batch")
-print("  error          the call failed; check function logs")'
+  | "$(dirname "$0")/_render_hydrate.py"

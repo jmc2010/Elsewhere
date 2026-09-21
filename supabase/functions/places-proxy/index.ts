@@ -229,9 +229,27 @@ Deno.serve(async (req: Request) => {
 
   const key = Deno.env.get("GOOGLE_MAPS_API_KEY");
   const url = Deno.env.get("SUPABASE_URL");
-  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  // Supabase injects the service role key under either name depending on
+  // project age: the newer secret-key naming, or the original.
+  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ??
+    Deno.env.get("SUPABASE_SECRET_KEY");
+
+  // Name what is missing. "server misconfigured" is true and useless, and
+  // the caller cannot see the function environment to work it out.
+  const missing = [
+    !key && "GOOGLE_MAPS_API_KEY (set it: supabase secrets set ...)",
+    !url && "SUPABASE_URL (normally injected by the platform)",
+    !serviceKey &&
+    "SUPABASE_SERVICE_ROLE_KEY or SUPABASE_SECRET_KEY (normally injected)",
+  ].filter(Boolean);
+  // Written as an explicit triple test rather than `missing.length > 0` so
+  // TypeScript narrows all three to string for the rest of the handler.
   if (!key || !url || !serviceKey) {
-    return json({ error: "server misconfigured" }, 500);
+    return json({
+      error: "server misconfigured: missing " + missing.join("; "),
+      hint: "supabase secrets list shows what is set; platform-injected " +
+        "variables do not appear there.",
+    }, 500);
   }
 
   // Identify the caller. The quota is per user, so an unauthenticated request
