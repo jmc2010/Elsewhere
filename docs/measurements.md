@@ -211,3 +211,55 @@ second.
 At 73%, roughly one shortlist card in four shows no rating. That is a product
 question as much as an engineering one, and it should be settled before the
 shortlist UI is designed around every card having one.
+
+
+---
+
+## Hydration must be cached per place, not per query
+
+**Measured 2026-09-20**, from `google_calls_per_session()` on a real session.
+
+```
+app-1789957969059-q90neg    42 calls    02:32:51 -> 02:33:53
+```
+
+**42 Google calls in 62 seconds** — about four filter changes, and 70% of the
+60/day quota spent in one minute of browsing.
+
+### Cause
+
+The hydration query was keyed on the whole list of place ids:
+
+```ts
+queryKey: ["hydrate", ids]     // every filter change is a total cache miss
+```
+
+Filtering from "everything" to "barbecue" re-bought every barbecue place,
+seconds after they had been hydrated in the unfiltered list.
+
+The flaw was invisible before the filter sheet existed, because there was one
+query per session. The filter sheet did not cause it — it exposed it, by
+inviting exactly the interaction the product is built around.
+
+### Cost
+
+At $0.02 per Place Details call that minute cost **$0.84**. Spec §5 models ~6
+calls per session and ~$1.60 per user per *month*; a user who browses filters
+for a minute a day would cost roughly **$25/month**.
+
+§5.1's stated lever is "narrow harder in Layer 1 first", but this was never a
+narrowing problem. We were paying repeatedly for data already fetched.
+
+### Fix
+
+Accumulate hydration **by place id**, so a filter change pays only for places
+not seen before. Only settled outcomes are cached: `ok` and `unresolved` are
+facts about whether a place has a Google listing, while `error` and
+`quota_exceeded` are transient and caching them would make one bad moment
+permanent for the session.
+
+### Why this is in measurements.md and not just a commit
+
+The metric found it on its first real day, which is the argument for §5's
+insistence that calls-per-session be instrumented **from the first hydration
+call, not after launch**. Nothing about the code looked wrong; the number did.

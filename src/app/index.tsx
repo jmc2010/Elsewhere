@@ -145,25 +145,54 @@ export default function Home() {
 
   const ids = catalog.data?.map((p) => p.place_id) ?? [];
 
+  // Hydration is cached PER PLACE, not per query.
+  //
+  // Keying on the whole id list meant every filter change was a total cache
+  // miss: measured at 42 Google calls in 62 seconds of filter browsing, about
+  // 70% of the daily quota, re-fetching places that had been hydrated seconds
+  // earlier. Filtering from "everything" to "barbecue" re-bought every
+  // barbecue place.
+  //
+  // Accumulating by place id means a filter change only pays for places it has
+  // not seen. That matters because the filter sheet actively invites the
+  // browsing that triggered it.
+  const [liveById, setLiveById] = useState<Map<string, HydratedPlace>>(
+    () => new Map(),
+  );
+
+  const missing = ids.filter((id) => !liveById.has(id));
+
   const hydration = useQuery({
-    queryKey: ["hydrate", ids],
-    enabled: ids.length > 0,
-    // Google data is request-scoped and must not be written to disk, but
-    // holding it in memory for the length of a decision is the point of
-    // hydrating at all.
+    // join() rather than the array: a fresh array with identical contents is a
+    // different key by reference, which would re-fetch on every render.
+    queryKey: ["hydrate", missing.join(",")],
+    enabled: missing.length > 0,
     gcTime: 10 * 60 * 1000,
     queryFn: async (): Promise<HydrateResponse> => {
       const { data, error } = await supabase.functions.invoke("places-proxy", {
-        body: { action: "hydrate", place_ids: ids, session_id: sessionId },
+        body: { action: "hydrate", place_ids: missing, session_id: sessionId },
       });
       if (error) throw error;
       return data as HydrateResponse;
     },
   });
 
-  const liveById = new Map<string, HydratedPlace>(
-    (hydration.data?.places ?? []).map((p) => [p.place_id, p]),
-  );
+  useEffect(() => {
+    if (!hydration.data) return;
+    setLiveById((prev) => {
+      const next = new Map(prev);
+      for (const p of hydration.data.places) {
+        // Only cache outcomes that will not change within a session. `ok` and
+        // `unresolved` are settled facts -- a place either has a Google
+        // listing or does not. `error` and `quota_exceeded` are transient, and
+        // caching them would make one bad moment permanent for the session.
+        if (p.live_status === "ok" || p.live_status === "unresolved") {
+          next.set(p.place_id, p);
+        }
+      }
+      return next;
+    });
+  }, [hydration.data]);
 
   if (sessionError) return <Message title="Couldn't connect" body={sessionError} />;
 
@@ -234,7 +263,7 @@ export default function Home() {
           {catalog.data.length === 0
             ? `Nothing within ${filters.radiusMiles} miles`
             : `Nearest ${catalog.data.length} within ${filters.radiusMiles} miles`}
-          {hydration.isPending && catalog.data.length > 0
+          {missing.length > 0 && hydration.isFetching
             ? " · checking ratings…"
             : ""}
         </Text>
