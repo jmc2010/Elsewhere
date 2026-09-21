@@ -97,9 +97,11 @@ creates. Run it before trusting anything in this file.
 - **0015 resolution retry** — applied. Failed resolutions retry after 30 days.
 - **0016 probably_closed** — applied. Infers closure for a known chain Google
   cannot find, and suppresses it from shortlists.
-- **Shortlist hydration wired into the app** — catalog renders immediately,
-  Google data fills in when it lands. Bundles clean; **not yet run on a
-  device.**
+- **Shortlist hydration working on a real device**, 2026-09-20. Ten cards
+  with live ratings, price and open-now, filling in after the catalog list
+  renders. Layer 1 → Layer 2 → screen, end to end.
+- **Filter sheet** — cuisine by group, four distance presets. Committed but
+  **not in the installed APK**; that build predates it.
 - **Expo app scaffold** — SDK 57, RN 0.86, React 19, expo-router, TypeScript
   strict. iOS (3.3MB) and Android (3.6MB) bundles both build.
 - **Running on a real device, 2026-09-20.** Home screen returns the nearest 25
