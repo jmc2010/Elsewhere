@@ -175,8 +175,56 @@ applies.
 - **Explicit signal** — rating, "never again", "special occasion only",
   "great patio", saved lists.
 - **Implicit signal** — surfaced-but-skipped counts, detail views, reroll-aways.
+- **Corrections** — "this place is gone", "wrong name", "it moved". See
+  §4.1; this is Layer 3 data like any other, and it is the only route we
+  have to catalog errors that no upstream source will ever fix.
 - **Per-person and per-group profiles.** A meal has attendees; preferences
   resolve against whoever is actually present.
+
+### 4.1 Corrections — the community layer
+
+**The catalog contains dead restaurants and no data source will tell us.**
+Confirmed on the ground in Valley View: Rider's Smokehouse sold years ago and
+the premises have since been two other places; the Dairy Queen shut and the
+building is now Tia's Tex-Mex. Overture marks both `open`.
+
+Google's `businessStatus` is the corrective §11 assumes, and it helped with
+neither — it only works while Google still carries the dead listing, and for
+both of these Google carries nothing at all. We infer closure for chains from
+Google's inability to find them (see `docs/measurements.md`), because Google's
+chain coverage is effectively complete. **For independents there is no
+automated signal at all**, and independents are exactly what this product
+exists to surface.
+
+So the correction has to come from a person who has been there.
+
+**The mechanic is the moment the app was wrong.** Waze's insight was not
+badges; it was asking at the instant of maximum motivation — you are stuck in
+traffic, so reporting traffic feels like revenge rather than chore. Ours is
+sharper, because being sent to a restaurant that no longer exists is a worse
+five minutes than a rating prompt will ever earn. The app already knows it
+surfaced that place and that the user chose it, so the ask folds into the
+existing post-visit loop rather than being a new surface: `visits` asks *did
+you go?*, and **a "no, it is gone" is worth more than any rating.**
+
+**Single-player value first**, exactly as with groups (§5.3). A correction
+that only affects the reporter's own catalog is useful at n=1 — the developer
+fixing Valley View for themselves needs no network effect — and it defers the
+trust problem entirely, since a report nobody else sees needs no defence
+against abuse. Promoting a correction to a catalog-wide fact is a separate
+decision, made when volume justifies a trust model, not before.
+
+**Density is the honest weakness.** Waze needed cars on every road; this needs
+eaters in Krum and Muenster. Community reporting is thinnest exactly where the
+catalog is most differentiated and most stale. Single-player value is what
+makes that survivable rather than fatal.
+
+**Competitively this is unusually defensible.** It is Layer 3, so it carries
+no licensing restriction and no marginal cost — the only quality improvement
+available to us that gets cheaper with scale instead of more expensive. Zest
+cannot copy it: transaction data has no catalog to correct and gives their
+users no reason to. Google has the data but no reason for a user to maintain
+a listing on its behalf.
 
 ### The join problem (important)
 
@@ -379,9 +427,9 @@ that is version-controlled and applied at ingest. Not an at-request LLM call.
 |---|---|---|
 | **0 — Foundation** | Repo scaffold, Supabase project, Overture ingest pipeline for one metro, cuisine mapping table | Catalog queryable by radius + cuisine in <200ms |
 | **1 — Shortlist** | Filter sheet, `catalog-search`, `places-proxy` hydration, shortlist UI, place detail | A real "where to eat" query returns 10 good cards under budget |
-| **2 — Memory** | Auth, visits, ratings, vetoes, recency decay, Surprise Me | The app's picks measurably differ from Google's ranking |
+| **2 — Memory** | Auth, visits, ratings, vetoes, recency decay, Surprise Me, **corrections (§4.1)** | The app's picks measurably differ from Google's ranking |
 | **3 — Groups** | Households, meals, swipe rounds, fairness ledger | Two phones reach a joint decision |
-| **4 — Scale** | Multi-metro ingest, cost telemetry + alerting, onboarding seed flow, store submission | Hydration calls/session within budget at 100 users |
+| **4 — Scale** | Multi-metro ingest, cost telemetry + alerting, onboarding seed flow, store submission, **promoting corrections catalog-wide** | Hydration calls/session within budget at 100 users |
 
 **Cold start is now a competitive problem, not just a UX one.** A brand-new
 user has no history and therefore no edge over Google — and Zest has already
@@ -397,7 +445,11 @@ enough to not lose the first session, without asking for a bank login:
    current export format and permission flow in Phase 2 — if it works, it
    neutralizes Zest's main structural advantage at a fraction of the
    onboarding friction.
-3. **Household inheritance.** The second person to join a household starts with
+3. **Corrections as engagement.** Reporting that a place has closed is a
+   contribution a brand-new user can make on day one, before any taste profile
+   exists — and it improves their own catalog immediately (§4.1). It is the
+   rare onboarding ask that gives back faster than it takes.
+4. **Household inheritance.** The second person to join a household starts with
    the household's accumulated history rather than from zero.
 
 ---
