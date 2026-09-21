@@ -59,6 +59,13 @@
         "projectId": "f5ddd652-0469-4c74-b942-3c387a7e9335"
       }
     },
-    "owner": "jasonmcgowan08"
+    "owner": "jasonmcgowan08",
+    "updates": {
+      "url": "https://u.expo.dev/f5ddd652-0469-4c74-b942-3c387a7e9335",
+      "fallbackToCacheTimeout": 0
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    }
   }
 }

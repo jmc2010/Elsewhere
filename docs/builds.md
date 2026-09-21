@@ -97,11 +97,34 @@ question, and trademark clearance against ELSEWHERE.TO LTD. If that
 clearance goes badly, an identifier not built on the name is easier to live
 with.
 
-## When the JS changes
+## Over-the-air updates
 
-A preview build has the bundle baked in, so app changes need a rebuild — or
-EAS Update, which pushes new JavaScript to an installed build without one.
-Worth configuring once field testing becomes a habit; not needed yet.
+Configured. `expo-updates` is installed, `app.json` carries the update URL,
+and each build profile declares a channel — without a channel a build
+subscribes to nothing and can never receive an update.
+
+**Any build made BEFORE this was added cannot receive updates.** The binary
+has to contain `expo-updates`, so one more build is required; after that, JS
+changes ship in seconds:
+
+```bash
+npx eas update --branch preview --message "what changed"
+```
+
+The app picks it up on next launch. `fallbackToCacheTimeout: 0` makes it wait
+for the update rather than running yesterday's code for one launch — the
+bundle is local, so it costs a few hundred milliseconds, and a decision app
+silently running stale code is worse.
+
+**`runtimeVersion` is `appVersion` policy**, so an update only reaches builds
+whose native layer matches. That is what stops JS being shipped that calls a
+native module the installed binary does not have.
+
+### What OTA cannot do
+
+Native changes still need a rebuild: a new native module, anything in
+`app.json` affecting the manifest or entitlements, an SDK upgrade. Everything
+in this project since the initial scaffold would have been OTA-able.
 
 ## Still Expo Go for desk work
 
