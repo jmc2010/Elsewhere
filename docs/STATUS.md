@@ -27,6 +27,18 @@ the ~182 distinct categories, which barely grows with area, and bbox
 predicates push down to parquet row-group stats so the whole extract takes
 about nine seconds.
 
+## Check what is actually applied
+
+Migrations are applied by hand here, so nothing tracks them and the list
+below is only as accurate as whoever last edited it. This is not:
+
+```bash
+psql "$ELSEWHERE_PG_URL" -P pager=off -f scripts/check-schema.sql
+```
+
+One row per migration, each looking for a landmark object only that migration
+creates. Run it before trusting anything in this file.
+
 ## Done
 
 - Repo, `CLAUDE.md`, `docs/spec.md`
