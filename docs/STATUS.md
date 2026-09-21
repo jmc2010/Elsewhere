@@ -95,8 +95,11 @@ creates. Run it before trusting anything in this file.
   First live hydration: Tia's Tex-Mex 4.8★ (287), Subway 3.7★ (75), both with
   price, business status and open-now. Quota recorded correctly.
 - **0015 resolution retry** — applied. Failed resolutions retry after 30 days.
-- **0016 probably_closed** — written, **not yet applied**. Infers closure for
-  a known chain Google cannot find, and suppresses it from shortlists.
+- **0016 probably_closed** — applied. Infers closure for a known chain Google
+  cannot find, and suppresses it from shortlists.
+- **Shortlist hydration wired into the app** — catalog renders immediately,
+  Google data fills in when it lands. Bundles clean; **not yet run on a
+  device.**
 - **Expo app scaffold** — SDK 57, RN 0.86, React 19, expo-router, TypeScript
   strict. iOS (3.3MB) and Android (3.6MB) bundles both build.
 - **Running on a real device, 2026-09-20.** Home screen returns the nearest 25
@@ -162,7 +165,11 @@ Then hydrate a real shortlist from `catalog_search` and check three things:
 3. `live_status` distribution roughly matches the spike's ~73% — if `ok` is
    far below that, something in the resolution path differs from the spike.
 
-**Run the app.** It has never been on a device.
+**Rebuild the APK.** The one on the phone has the truncated publishable key
+baked in, so it cannot connect. Fix the EAS variable first (see
+`docs/builds.md`), then `npx eas build -p android --profile preview`.
+
+**Run the app.**
 
 ```bash
 cp .env.example .env     # fill in the two EXPO_PUBLIC_ values
