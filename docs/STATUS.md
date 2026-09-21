@@ -94,8 +94,9 @@ creates. Run it before trusting anything in this file.
 - **`places-proxy` edge function** — **deployed and working**, 2026-09-20.
   First live hydration: Tia's Tex-Mex 4.8★ (287), Subway 3.7★ (75), both with
   price, business status and open-now. Quota recorded correctly.
-- **0015 resolution retry** — written, **not yet applied**. Makes a failed
-  resolution retryable after 30 days.
+- **0015 resolution retry** — applied. Failed resolutions retry after 30 days.
+- **0016 probably_closed** — written, **not yet applied**. Infers closure for
+  a known chain Google cannot find, and suppresses it from shortlists.
 - **Expo app scaffold** — SDK 57, RN 0.86, React 19, expo-router, TypeScript
   strict. iOS (3.3MB) and Android (3.6MB) bundles both build.
 - **Running on a real device, 2026-09-20.** Home screen returns the nearest 25
@@ -184,6 +185,41 @@ friction, which is the competitive point against Zest's Plaid wall (§10).
 **Then the rest of Phase 1:** filter sheet, shortlist hydration through
 `places-proxy`, place detail. Exit criteria is a real "where to eat" query
 returning 10 good cards under budget.
+
+### Stale catalog entries are a real problem, and chains betray them
+
+Two confirmed on the ground in Valley View alone, both marked `open` by
+Overture:
+
+- **Rider's Smokehouse** sold years ago; the premises have been two other
+  restaurants since.
+- **The Dairy Queen** shut, and the building is now Tia's Tex-Mex.
+
+Google's `businessStatus` — the corrective §11 anticipated — helped with
+neither, because it only works when Google still carries the dead listing.
+For both of these Google carries nothing.
+
+What does work is an asymmetry in Google's coverage. **Chain coverage is
+effectively complete**: asked for "Dairy Queen, Valley View, TX" it offered
+the Sanger branch 14km away, which is Google saying *there isn't one here*.
+**Rural independent coverage is not complete**, and that gap is the reason
+this catalog exists.
+
+So 0016 suppresses a known chain that fails resolution, and leaves
+independents alone. 7,755 places (19.7%) match `brand_cuisine_map`, and only
+those that also fail resolution are affected. It is recorded as
+`probably_closed`, deliberately separate from `permanently_closed` — one is
+our inference from an absence, the other is Google asserting it, and they
+should not be conflated.
+
+Known false positive: a brand-new franchise Google has not indexed yet stays
+hidden until the 30-day retry.
+
+**Also worth knowing:** Dairy Queen and Tia's Tex-Mex are **42.6m apart** in
+Overture's coordinates despite being the same building, so `colocated_count`
+(30m) did not flag it. Rider's and its successor were 8m apart. Widening the
+radius is expensive — 50m flags 70% of the catalog, 75m flags 79% — and would
+not have helped, since the name check rejected it anyway.
 
 ### What the first live hydration found
 
