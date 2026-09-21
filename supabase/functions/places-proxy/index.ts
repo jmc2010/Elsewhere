@@ -148,6 +148,9 @@ interface CatalogPlace {
   name: string;
   lat: number;
   lon: number;
+  /** Used to make the Text Search query specific; see resolvePlaceId. */
+  locality: string | null;
+  region: string | null;
   google_place_id: string | null;
   google_resolution_failed: boolean;
   google_resolution_attempted_at: string | null;
@@ -197,8 +200,19 @@ interface QuotaGrant {
 async function resolvePlaceId(
   key: string, place: CatalogPlace,
 ): Promise<string | null> {
+  // Name ALONE is not enough, and this cost a live debugging round.
+  //
+  // locationBias is advisory (see above), so a bare "Dairy Queen" lets Google
+  // return whichever branch it prefers; the distance check then rejects it and
+  // the place comes back unresolved. Valley View's Dairy Queen failed exactly
+  // this way while the identical place resolved at 11m from the spike, which
+  // had always included locality.
+  //
+  // The 73% in docs/measurements.md was measured WITH locality. Any change
+  // here invalidates that number.
+  const locality = [place.locality, place.region].filter(Boolean).join(", ");
   const body = {
-    textQuery: place.name,
+    textQuery: locality ? `${place.name}, ${locality}` : place.name,
     maxResultCount: 1,
     // locationBias, NOT locationRestriction. See the note above.
     locationBias: {
@@ -325,7 +339,7 @@ Deno.serve(async (req: Request) => {
     // Must stay one string literal: supabase-js infers the row type from the
     // column list statically, and a concatenated expression degrades it to
     // GenericStringError.
-    .select("id, name, google_place_id, google_resolution_failed, google_resolution_attempted_at, colocated_count")
+    .select("id, name, locality, region, google_place_id, google_resolution_failed, google_resolution_attempted_at, colocated_count")
     .in("id", ids)
     .eq("permanently_closed", false);
   if (rowsErr) return json({ error: rowsErr.message }, 500);
@@ -344,6 +358,8 @@ Deno.serve(async (req: Request) => {
   const places: CatalogPlace[] = (rows ?? []).map((r) => ({
     id: r.id,
     name: r.name,
+    locality: r.locality,
+    region: r.region,
     lat: coordById.get(r.id)?.lat ?? 0,
     lon: coordById.get(r.id)?.lon ?? 0,
     google_place_id: r.google_place_id,

@@ -167,10 +167,27 @@ problem from thin coverage. The worry that Elsewhere's rural advantage would
 be undercut by unresolvable places is not supported at n=30 — though 30 is
 small and this is worth re-measuring on a larger sample before leaning on it.
 
+### The query must include locality
+
+The 73% was measured with a text query of `"<name>, <locality>, TX"`, not the
+bare name. That is not a detail.
+
+`places-proxy` shipped sending only the name, and Valley View's Dairy Queen
+came back `unresolved` — while the identical chain resolved at 11m, name
+similarity 1.00, from the spike. Because `locationBias` is advisory, a bare
+`"Dairy Queen"` lets Google return whichever branch it likes; the distance
+check then correctly rejects it, and the place is recorded as having no
+Google listing when it plainly has one.
+
+**Any change to the query invalidates the 73%.** The measurement describes one
+specific request shape, and the deployed code silently diverged from it.
+
 ### Requirements this places on `places-proxy`
 
 1. **Use `locationBias`, and validate the returned coordinates and name
    yourself** using the rule above. Do not rely on Google to bound anything.
+2. **Include locality and region in the text query.** The bias will not do
+   that work for you.
 2. **Reject rather than guess.** A rejected resolution is `no_result`, which
    is recoverable. A wrong `place_id` is stored permanently, is returned to
    every user forever, and has no runtime signal that anything is wrong.
