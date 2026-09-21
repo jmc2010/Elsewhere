@@ -224,15 +224,29 @@ def estimate(names: list[str], taxonomy: str) -> float:
     return cost * BATCH_DISCOUNT
 
 
-def emit_sql(tsv_path: str) -> int:
-    rows = []
+def emit_sql(tsv_path: str, min_confidence: str = "medium") -> int:
+    # Errors concentrate in the low-confidence rows, and a wrong cuisine is
+    # worse than none: it puts a place in a filter it does not belong in,
+    # which a user notices far less readily than an absence. Default to
+    # excluding them; --min-confidence low includes everything.
+    rank = {"low": 0, "medium": 1, "high": 2}
+    floor = rank[min_confidence]
+
+    rows, dropped = [], 0
     with open(tsv_path) as fh:
         for line in fh:
             if not line.strip() or line.startswith("#"):
                 continue
             name, slug, conf = (line.rstrip("\n").split("\t") + ["", ""])[:3]
-            if slug and slug != "null":
-                rows.append((name, slug, conf))
+            if not slug or slug == "null":
+                continue
+            if rank.get(conf, 0) < floor:
+                dropped += 1
+                continue
+            rows.append((name, slug, conf))
+    if dropped:
+        print(f"-- {dropped} rows below confidence '{min_confidence}' excluded.",
+              file=sys.stderr)
 
     def q(s: str) -> str:
         return "'" + s.replace("'", "''") + "'"
@@ -275,6 +289,11 @@ from (values""")
     print("""\
 ) as v(name_norm, cuisine_slug, confidence)
 join cuisines c on c.slug = v.cuisine_slug
+-- norm_place_name is ASCII-only, so a name written entirely in CJK, Thai or
+-- Korean normalizes to the empty string. The table rejects '' as a key
+-- precisely so those cannot all collide on one row; skip them here rather
+-- than trip the constraint. They keep whatever cuisine their category gave.
+where v.name_norm <> ''
 on conflict (name_norm) do nothing;""")
     print(f"""
 -- Link the places these names belong to. Without this the table is populated
@@ -311,10 +330,13 @@ def main() -> int:
     ap.add_argument("--out", default="cuisine_names.tsv")
     ap.add_argument("--emit-sql", metavar="TSV",
                     help="turn a reviewed TSV into a migration on stdout")
+    ap.add_argument("--min-confidence", choices=["low", "medium", "high"],
+                    default="medium",
+                    help="lowest confidence to include (default: medium)")
     args = ap.parse_args()
 
     if args.emit_sql:
-        return emit_sql(args.emit_sql)
+        return emit_sql(args.emit_sql, args.min_confidence)
 
     pg = os.environ.get("ELSEWHERE_PG_URL")
     if not pg:
@@ -409,14 +431,20 @@ def main() -> int:
         raise SystemExit(f"the batch was rejected: {e}")
     print(f"\nbatch {batch.id} submitted; polling")
 
+    # One line per minute, overwritten in place. The first version printed a
+    # line every 30 seconds and buried the result under 600 identical rows.
+    waited = 0
     while True:
         b = client.messages.batches.retrieve(batch.id)
         if b.processing_status == "ended":
             break
-        print(f"  {b.processing_status}: "
-              f"{b.request_counts.succeeded} done, "
-              f"{b.request_counts.processing} in flight")
+        sys.stdout.write(
+            f"\r  {b.processing_status}: {b.request_counts.succeeded} done, "
+            f"{b.request_counts.processing} in flight  ({waited // 60}m)   ")
+        sys.stdout.flush()
         time.sleep(30)
+        waited += 30
+    print()
 
     print(f"succeeded {b.request_counts.succeeded}, "
           f"errored {b.request_counts.errored}")
