@@ -17,6 +17,17 @@ jobs:
       - name: Assert no Google Places content is persisted
         run: python3 scripts/check-no-google-persistence.py
 
+  colour-literals:
+    name: Colour literal guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Assert every colour goes through the theme
+        run: python3 scripts/check-no-colour-literals.py
+
   edge-functions:
     name: Edge function typecheck
     runs-on: ubuntu-latest
