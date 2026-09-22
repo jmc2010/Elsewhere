@@ -5,6 +5,14 @@ canvas. The constraints in §4 are where most of the design problem actually
 lives, and several of them are unusual enough that they will not occur to you
 from the screens alone.
 
+**Ask questions.** The person who commissioned this is available and wants to
+be asked — about the product, the market, who this is for, why a decision was
+made, what a screen is meant to feel like, anything. A brief written in
+advance cannot anticipate what you will need once you start, and a wrong
+assumption carried through a whole design costs far more than a question does.
+Do not guess at intent and do not pad around a gap: say what you need to know
+and ask for it.
+
 ---
 
 ## 1. Who you are on this
@@ -201,6 +209,11 @@ In rough priority:
 written rationale for the decisions you would defend. Where you think an
 interaction is wrong — not just unstyled — say so plainly and propose the
 replacement.
+
+**Before you build, ask.** If the register is unclear, if you need to know who
+this is really for, if you want to see the app running, if a constraint in §4
+seems to rule out the obvious answer — raise it. Questions early are cheap and
+welcome; a finished canvas built on a wrong assumption is neither.
 
 ---
 
