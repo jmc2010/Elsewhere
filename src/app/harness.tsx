@@ -124,6 +124,36 @@ const STATES: { state: string; card: PlaceCardProps }[] = [
   },
 ];
 
+/**
+ * The largest text scale the card is expected to survive.
+ *
+ * Android's largest font-size setting is about 1.3x, and compounds with
+ * Display size to roughly 2x. iOS goes further: the accessibility Dynamic Type
+ * sizes reach about 3.1x for body text. 2.0 is therefore a real setting people
+ * use rather than a synthetic stress test, and it is the point at which the
+ * two-line name plus a wrapped meta line starts fighting the card's rhythm.
+ *
+ * If the grid holds here but we also want to promise iOS AX5, the answer is a
+ * `maxFontSizeMultiplier` cap on the name, not a smaller number here.
+ */
+const MAX_FONT_SCALE = 2;
+
+/**
+ * The case that only breaks at scale: a name that already wraps to two lines,
+ * with the text doubled and the card no wider. Everything else on the card can
+ * reflow; the name cannot, because it is capped at two lines and then
+ * ellipsises. This is where the eight-state grid gives way if it is going to,
+ * and it is invisible at the default setting -- which is exactly why it is
+ * pinned here rather than left to whoever remembers to change their phone.
+ */
+const MAX_SCALE_CASE: PlaceCardProps = {
+  name: "Cousins Maine Lobster — Dallas Fort-Worth, TX",
+  tick: { text: "Nobody's been here", tone: "frontier" },
+  meta: { cuisine: "Seafood", locality: "Dallas", distanceMiles: 0.0, rating: 4.1 },
+  reason: { kind: "frontier", text: "New name since the spring. You'd be the first to say anything." },
+  action: { label: "Call ahead", tone: "brass" },
+};
+
 function Block({ themeName }: { themeName: ThemeName }) {
   return (
     <ThemeProvider force={themeName}>
@@ -149,6 +179,14 @@ function BlockBody({ themeName }: { themeName: ThemeName }) {
           </View>
         ))}
       </View>
+
+      <Text style={s.scaleHeading}>
+        At {MAX_FONT_SCALE}x text scale
+      </Text>
+      <ThemeProvider force={themeName} fontScale={MAX_FONT_SCALE}>
+        <PlaceCard {...MAX_SCALE_CASE} isFirst />
+      </ThemeProvider>
+      <Text style={s.stateLabel}>Largest font scale · two-line name</Text>
     </View>
   );
 }
@@ -197,6 +235,12 @@ const harnessStyles = ({ colours: c, space }: Theme) =>
     },
     // Harness furniture, not part of the card. Sits under each card so the
     // state being looked at is named while comparing against the canvas.
+    scaleHeading: {
+      ...type.label,
+      color: c.inkFaint,
+      marginTop: space.xxl,
+      marginBottom: space.sm,
+    },
     stateLabel: {
       ...type.label,
       color: c.brass,

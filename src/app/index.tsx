@@ -12,6 +12,7 @@
 // Queries live in the screen, per CLAUDE.md: screens own their own queries.
 
 import { useQuery } from "@tanstack/react-query";
+import { Redirect } from "expo-router";
 import * as Location from "expo-location";
 import { useCallback, useEffect, useState } from "react";
 import {
@@ -91,7 +92,7 @@ const PRICE: Record<string, string> = {
 
 type Permission = "unknown" | "explaining" | "granted" | "denied";
 
-export default function Home() {
+function Home() {
   const [permission, setPermission] = useState<Permission>("unknown");
   const [coords, setCoords] = useState<{ lat: number; lon: number } | null>(null);
   const [sessionReady, setSessionReady] = useState(false);
@@ -541,3 +542,33 @@ const styles = StyleSheet.create({
   closed: { fontSize: 14, color: "#8a8a8a" },
   noRating: { fontSize: 13, color: "#a5a5a5", marginTop: 5, fontStyle: "italic" },
 });
+
+/**
+ * Card-harness override -- permanent, and deliberately off by default.
+ *
+ * `/harness` renders all eight card states in both themes plus the largest
+ * text scale. It is the regression check for any change to PlaceCard: the
+ * states that break are the ones nobody looks at, and they do not break
+ * visibly in a product screen until a real row happens to hit them.
+ *
+ * The route itself is always present, so it stays reachable directly --
+ * `elsewhere://harness` on a device, `/harness` on web. This constant only
+ * controls whether the *home* route redirects to it, which is the convenient
+ * way to look at it on a phone.
+ *
+ * Gated on __DEV__ as well as the variable so it can never fire in a preview
+ * or production bundle, however the env is set. To use it:
+ *
+ *     EXPO_PUBLIC_CARD_HARNESS=1 npx expo start
+ *
+ * Swapping the exported component rather than returning early from Home()
+ * keeps the hook order untouched, which matters with the React Compiler on.
+ */
+const SHOW_CARD_HARNESS =
+  __DEV__ && process.env.EXPO_PUBLIC_CARD_HARNESS === "1";
+
+function CardHarnessRedirect() {
+  return <Redirect href="/harness" />;
+}
+
+export default SHOW_CARD_HARNESS ? CardHarnessRedirect : Home;

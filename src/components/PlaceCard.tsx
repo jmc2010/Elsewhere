@@ -1,8 +1,8 @@
 import { Fragment, type ReactNode } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View, type TextProps } from "react-native";
 
 import { useTheme, type Palette, type Theme, type ThemeName } from "@/theme/tokens";
-import { tabular, type } from "@/theme/type";
+import { scaled, tabular, type } from "@/theme/type";
 
 /**
  * The shortlist card (design spec §2).
@@ -37,7 +37,7 @@ import { tabular, type } from "@/theme/type";
  */
 
 /** U+2605, drawn into Archivo by scripts/fonts/build_static_instances.py. */
-const STAR = "★";
+const STAR = "\u2605";
 
 /**
  * Provenance marker above the name. Tone is the meaning, not the colour --
@@ -109,6 +109,24 @@ function formatMiles(miles: number): string {
   return `${miles.toFixed(1)} mi`;
 }
 
+/**
+ * Every piece of text on the card goes through this rather than Text directly.
+ *
+ * It exists for one reason: when the theme pins a text scale -- the harness
+ * checking the largest Dynamic Type setting -- OS scaling has to be switched
+ * off, or the preview multiplies the pinned scale by whatever the tester
+ * already has set and shows a size nobody will ever see. In the normal case,
+ * `fontScaleOverride` null, this passes allowFontScaling true and behaves
+ * exactly like Text, which is what spec §11 requires.
+ *
+ * A wrapper rather than a prop at each of the twelve call sites, so a Text
+ * added here later cannot quietly miss it.
+ */
+function CardText(props: TextProps) {
+  const { fontScaleOverride } = useTheme();
+  return <Text allowFontScaling={fontScaleOverride === null} {...props} />;
+}
+
 export function PlaceCard({
   name,
   meta,
@@ -125,25 +143,25 @@ export function PlaceCard({
   // Collect only the meta elements that exist. An absent element contributes
   // nothing at all -- no slot, no separator, no reserved width.
   const metaParts: ReactNode[] = [];
-  if (meta?.cuisine) metaParts.push(<Text style={s.meta}>{meta.cuisine}</Text>);
-  if (meta?.locality) metaParts.push(<Text style={s.meta}>{meta.locality}</Text>);
+  if (meta?.cuisine) metaParts.push(<CardText style={s.meta}>{meta.cuisine}</CardText>);
+  if (meta?.locality) metaParts.push(<CardText style={s.meta}>{meta.locality}</CardText>);
   if (meta?.distanceMiles != null) {
     metaParts.push(
-      <Text style={[s.meta, tabular]}>{formatMiles(meta.distanceMiles)}</Text>,
+      <CardText style={[s.meta, tabular]}>{formatMiles(meta.distanceMiles)}</CardText>,
     );
   }
   if (meta?.rating != null) {
     // Star and numeral share one Text so they can never wrap apart. The star's
     // trailing gap is baked into its advance width, not added here.
     metaParts.push(
-      <Text style={[s.meta, tabular]}>
+      <CardText style={[s.meta, tabular]}>
         {STAR}
         {meta.rating.toFixed(1)}
-      </Text>,
+      </CardText>,
     );
   }
-  if (meta?.priceLevel) metaParts.push(<Text style={s.meta}>{meta.priceLevel}</Text>);
-  if (meta?.closedNow) metaParts.push(<Text style={s.shut}>Closed now</Text>);
+  if (meta?.priceLevel) metaParts.push(<CardText style={s.meta}>{meta.priceLevel}</CardText>);
+  if (meta?.closedNow) metaParts.push(<CardText style={s.shut}>Closed now</CardText>);
 
   return (
     <Pressable
@@ -158,18 +176,18 @@ export function PlaceCard({
       accessibilityRole={onPress ? "button" : undefined}
     >
       {tick ? (
-        <Text style={[s.tick, { color: tickColour(tick.tone, c) }]}>{tick.text}</Text>
+        <CardText style={[s.tick, { color: tickColour(tick.tone, c) }]}>{tick.text}</CardText>
       ) : null}
 
-      <Text style={s.name} numberOfLines={2} ellipsizeMode="tail">
+      <CardText style={s.name} numberOfLines={2} ellipsizeMode="tail">
         {name}
-      </Text>
+      </CardText>
 
       {metaParts.length > 0 ? (
         <View style={s.metaRow}>
           {metaParts.map((part, i) => (
             <Fragment key={i}>
-              {i > 0 ? <Text style={s.sep}>·</Text> : null}
+              {i > 0 ? <CardText style={s.sep}>·</CardText> : null}
               {part}
             </Fragment>
           ))}
@@ -192,9 +210,9 @@ export function PlaceCard({
               pressed && s.pillPressed,
             ]}
           >
-            <Text style={[s.pillLabel, action.tone === "brass" && s.pillLabelBrass]}>
+            <CardText style={[s.pillLabel, action.tone === "brass" && s.pillLabelBrass]}>
               {action.label}
-            </Text>
+            </CardText>
           </Pressable>
         </View>
       ) : null}
@@ -207,19 +225,19 @@ function ReasonLine({ reason, theme }: { reason: Reason; theme: Theme }) {
 
   if (reason.kind === "caution") {
     return (
-      <Text style={s.caution}>
+      <CardText style={s.caution}>
         {reason.attributedTo ? (
-          <Text style={s.cautionName}>{reason.attributedTo}: </Text>
+          <CardText style={s.cautionName}>{reason.attributedTo}: </CardText>
         ) : null}
         {reason.text}
-      </Text>
+      </CardText>
     );
   }
 
   return (
-    <Text style={[s.reason, reason.kind === "frontier" && s.reasonFrontier]}>
+    <CardText style={[s.reason, reason.kind === "frontier" && s.reasonFrontier]}>
       {reason.text}
-    </Text>
+    </CardText>
   );
 }
 
@@ -228,19 +246,22 @@ function ReasonLine({ reason, theme }: { reason: Reason; theme: Theme }) {
  * cached rather than rebuilt on every render. Both ReasonLine and PlaceCard
  * ask for them, and the harness renders sixteen cards at once.
  */
-const sheets = new Map<ThemeName, ReturnType<typeof build>>();
+const sheets = new Map<string, ReturnType<typeof build>>();
 
 function styles(theme: Theme): ReturnType<typeof build> {
-  let sheet = sheets.get(theme.name);
+  const key = `${theme.name}@${theme.fontScaleOverride ?? "os"}`;
+  let sheet = sheets.get(key);
   if (!sheet) {
     sheet = build(theme);
-    sheets.set(theme.name, sheet);
+    sheets.set(key, sheet);
   }
   return sheet;
 }
 
-const build = ({ colours: c, space, radius, hairline }: Theme) =>
-  StyleSheet.create({
+const build = ({ colours: c, space, radius, hairline, fontScaleOverride }: Theme) => {
+  // 1 when following the OS, which makes `scaled` a no-op.
+  const f = fontScaleOverride ?? 1;
+  return StyleSheet.create({
     card: {
       // The single vertical rhythm every state shares. Changing any of these
       // five numbers changes all eight states at once, which is the point.
@@ -260,12 +281,12 @@ const build = ({ colours: c, space, radius, hairline }: Theme) =>
     },
 
     tick: {
-      ...type.label,
+      ...scaled(type.label, f),
       // Colour is applied at the call site from the tick's tone.
     },
 
     name: {
-      ...type.cardName,
+      ...scaled(type.cardName, f),
       color: c.ink,
     },
 
@@ -277,20 +298,20 @@ const build = ({ colours: c, space, radius, hairline }: Theme) =>
       rowGap: 0,
     },
     meta: {
-      ...type.meta,
+      ...scaled(type.meta, f),
       color: c.inkMuted,
     },
     sep: {
-      ...type.meta,
+      ...scaled(type.meta, f),
       color: c.inkFaint,
     },
     shut: {
-      ...type.metaStrong,
+      ...scaled(type.metaStrong, f),
       color: c.oxblood,
     },
 
     reason: {
-      ...type.reason,
+      ...scaled(type.reason, f),
       color: c.ink,
       opacity: 0.92,
       marginTop: 1,
@@ -300,12 +321,12 @@ const build = ({ colours: c, space, radius, hairline }: Theme) =>
       opacity: 1,
     },
     caution: {
-      ...type.caution,
+      ...scaled(type.caution, f),
       color: c.inkMuted,
       marginTop: 1,
     },
     cautionName: {
-      ...type.cautionName,
+      ...scaled(type.cautionName, f),
       color: c.ink,
     },
 
@@ -331,10 +352,11 @@ const build = ({ colours: c, space, radius, hairline }: Theme) =>
       opacity: 0.6,
     },
     pillLabel: {
-      ...type.pill,
+      ...scaled(type.pill, f),
       color: c.ink,
     },
     pillLabelBrass: {
       color: c.brass,
     },
   });
+};

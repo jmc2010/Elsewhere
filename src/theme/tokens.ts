@@ -103,13 +103,26 @@ export interface Theme {
   readonly space: typeof space;
   readonly radius: typeof radius;
   readonly hairline: number;
+  /**
+   * A fixed text scale to render at, instead of following the OS.
+   *
+   * `null` is the normal case: text scales with Dynamic Type / font size the
+   * way spec §11 requires, and nothing here interferes.
+   *
+   * A number pins the scale and switches OS scaling off, so the result is the
+   * same on every device. That is only useful for the harness -- it is how the
+   * card can be checked at the largest setting without anyone changing their
+   * phone's accessibility options, and without the preview compounding with
+   * whatever the tester already has set.
+   */
+  readonly fontScaleOverride: number | null;
 }
 
-function build(name: ThemeName): Theme {
-  return { name, colours: palettes[name], space, radius, hairline };
+function build(name: ThemeName, fontScaleOverride: number | null): Theme {
+  return { name, colours: palettes[name], space, radius, hairline, fontScaleOverride };
 }
 
-const ThemeContext = createContext<Theme>(build("dark"));
+const ThemeContext = createContext<Theme>(build("dark", null));
 
 export interface ThemeProviderProps {
   children: ReactNode;
@@ -120,15 +133,21 @@ export interface ThemeProviderProps {
    * really is identical across themes.
    */
   force?: ThemeName;
+  /**
+   * Pin the text scale rather than following the OS. Harness only -- see
+   * `Theme.fontScaleOverride`.
+   */
+  fontScale?: number;
 }
 
-export function ThemeProvider({ children, force }: ThemeProviderProps) {
+export function ThemeProvider({ children, force, fontScale }: ThemeProviderProps) {
   const scheme = useColorScheme();
   // useColorScheme() returns null when the platform has no preference yet.
   // Falling back to dark rather than light is the spec's position: this app is
   // used in a car, often after dark. A lit sign at dusk is the native state.
   const name: ThemeName = force ?? (scheme === "light" ? "light" : "dark");
-  const theme = useMemo(() => build(name), [name]);
+  const override = fontScale ?? null;
+  const theme = useMemo(() => build(name, override), [name, override]);
 
   return createElement(ThemeContext.Provider, { value: theme }, children);
 }

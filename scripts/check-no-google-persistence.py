@@ -7,7 +7,7 @@ Storing Google Places content beyond `place_id` (indefinite) and coordinates
 (30 days) violates the Google Maps Platform Terms. The `places` catalog table
 is the one place such a column would plausibly be added by accident, so this
 check scopes to it rather than banning the words outright -- our own
-`place_ratings.rating` is legitimate Layer 3 data and must keep working.
+`place_verdicts.verdict` is legitimate Layer 3 data and must keep working.
 
 See CLAUDE.md. Do not weaken this to make a migration pass.
 """

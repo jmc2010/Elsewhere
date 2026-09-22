@@ -167,6 +167,30 @@ export const type = {
 export type TypeRole = keyof typeof type;
 
 /**
+ * Multiply a role's metrics by a fixed factor.
+ *
+ * Only for the harness's pinned-scale rendering (see `Theme.fontScaleOverride`).
+ * Normal text scaling is the OS's job and needs none of this -- React Native
+ * already applies the user's Dynamic Type setting to `fontSize`, and doubling
+ * up would scale twice.
+ *
+ * Line height and letter spacing are scaled alongside the size because both
+ * are absolute points here, not ratios. Leaving `lineHeight` fixed while the
+ * size grows is what makes scaled-up text collide with the line beneath it.
+ */
+export function scaled<T extends TextStyle>(style: T, factor: number): T {
+  if (factor === 1) return style;
+  return {
+    ...style,
+    ...(style.fontSize != null ? { fontSize: style.fontSize * factor } : {}),
+    ...(style.lineHeight != null ? { lineHeight: style.lineHeight * factor } : {}),
+    ...(style.letterSpacing != null
+      ? { letterSpacing: style.letterSpacing * factor }
+      : {}),
+  };
+}
+
+/**
  * Load every instance. Fonts are Metro assets, so new cuts ship over EAS Update
  * without a native rebuild.
  *
