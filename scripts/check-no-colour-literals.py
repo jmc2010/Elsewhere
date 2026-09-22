@@ -33,10 +33,10 @@ ALLOWED = {"theme/tokens.ts"}
 # new ones. If a file you are working on is on this list, the fix is to rebuild
 # it against useTheme(), not to leave it here.
 LEGACY_PRE_DESIGN = {
-    "app/index.tsx",
+    # app/index.tsx and components/SurpriseReveal.tsx came off this list on
+    # 2026-09-22, rebuilt against the theme. Two to go.
     "components/FilterSheet.tsx",
     "components/LocationPicker.tsx",
-    "components/SurpriseReveal.tsx",
 }
 
 PATTERNS = [

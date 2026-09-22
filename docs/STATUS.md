@@ -13,10 +13,41 @@ distance, stars, open now), a settable search origin, a hydrated shortlist,
 and Surprise Me. A real "where to eat" query returns ten cards with live
 ratings at about ten Google calls per session.
 
-**Phase 2 — Memory** is next: auth, visits, ratings, vetoes, recency decay,
-Surprise Me's real weighting, and corrections (§4.1). Surprise Me exists but
-three of its four weight terms are neutral until Layer 3 has data —
-`src/components/SurpriseReveal.tsx` is where they land.
+**Design pass one — landed 2026-09-22.** [`docs/design-spec.md`](design-spec.md) and the
+published canvas. Tokens, type scale, tuning config and `PlaceCard` are built
+and checked against the canvas in both themes; the eight card states and a 2x
+text-scale case live at the `/harness` route.
+
+**Phase 2 — Memory** is in progress. The schema landed 2026-09-22: verdicts,
+tags and the ingest fields the card states depend on. What remains is the
+screens that write to it — the cold-start grid, then review capture. Surprise
+Me exists but three of its four weight terms stay neutral until Layer 3 has
+data; `src/components/SurpriseReveal.tsx` is where they land.
+
+**Ranking is correct rurally and a smaller compromise in cities than it
+first looked.** `catalog_search` returns a pool the client ranks. Rurally the
+pool is the whole truth — Valley View returns 21 of 21, Gainesville 163 of
+163, nothing is excluded before ranking. Downtown Dallas has 3,982 eligible
+places and the pool is 200, so any single request sees 5% of the city.
+
+An earlier version of this note stopped there and concluded the client was
+tuning weights over a 5% sample. That was measured before the ordering was
+fixed and it is now too gloomy. The pool is banded by freshness and then
+seeded per user per day (0031, 0036), so the slice rotates: **2,560 of 3,982
+downtown Dallas places — 64% — are reachable across a month**, against 200
+under the original fixed ordering. A given evening still shows 5%; what
+changed is that the other 95% are reachable rather than excluded forever.
+
+It remains a compromise. Ranking should move into `catalog_search` with the
+§15 thresholds in a tuning table, so the whole eligible set is ranked rather
+than a rotating sample of it. But it is a rotation problem now, not an
+exclusion one.
+
+**The pre-design screens are still the pre-design screens.** `index.tsx`,
+`FilterSheet`, `LocationPicker` and `SurpriseReveal` are Phase 1 scaffolding
+in system defaults, exempted by name in
+`scripts/check-no-colour-literals.py`. Each comes off that list as it is
+rebuilt; the list is expected to reach empty.
 
 ## Environment
 
@@ -164,54 +195,129 @@ fails with no useful error. The transaction pooler (6543) also will not work
 — DuckDB's bulk insert needs session-mode transactions. The paid IPv4 add-on
 is not needed; the shared pooler is already IPv4.
 
+### 2026-09-22 — design foundation, verdicts, and the ingest fields
+
+- **Static font instances, not variable fonts.** React Native 0.86 has no
+  `fontVariationSettings` on either platform — verified against the installed
+  package, not recalled. Fraunces' SOFT and WONK axes are unreachable at
+  runtime, so `scripts/fonts/build_static_instances.py` cuts ten static
+  instances at the five spec'd axis combinations. The rating star is drawn
+  into Archivo at U+2605: `react-native-svg` is a native module and would cost
+  a full rebuild for a 10px mark, and `★` falls through to SF Pro or Roboto.
+- **`scripts/check-no-colour-literals.py`** — in CI, verified to fail on hex,
+  `rgba()` and named colours.
+- **0021 verdicts and tags** — applied. Three verdicts, twenty seeded tags
+  with propagation classes. `place_ratings` was measured empty (0 rows) and
+  dropped behind a guard that raises if ever run against data;
+  `place_vetoes` folded in as `not_again`. `catalog_search` was rewritten in
+  the same migration because plpgsql does not resolve table references until
+  runtime — dropping `place_vetoes` alone would have broken search silently.
+- **0022–0024 ingest** — applied. `phone` (88.6%), `update_time` (100%),
+  `display_name` (461 cleaned). Cuisine coverage **93.2%**.
+- **0025 `known` verdict** — adds the cold-start state. `known` gets no
+  recency suppression (it carries no date) but does suppress novelty.
+  Not a weaker `fine`; collapsing them breaks the recognition grid.
+
+Three bugs found by measuring rather than reading, all worth remembering:
+
+1. **Taking the newest `update_time` across `sources` destroyed the signal** —
+   39,852 of 39,852 records landed in the current cycle, because every record
+   carries a bulk-stamped Overture source at the release date. It was reading
+   the release, not the place. `sources[1]` is the record-level contributor.
+   Check that holds: both known-closed Valley View places land stale — Dairy
+   Queen 2025-07-13, Rider's Smokehouse 2025-10-16.
+2. **The `name_cuisine_map` fold-in went into dead code.** `promote`'s `src`
+   CTE computed a `cuisine_id` nothing read; `place_cuisines` is rebuilt
+   further down from an independent re-derivation. The first promote took
+   coverage 93.2% → 88.8%, exactly as 0018 predicted. Fixed in 0024.
+3. **A backticked word in a SQL comment executed** — the extract heredoc must
+   stay unquoted for `${RELEASE}`. Harmless output, but arbitrary execution in
+   a script holding the database URL.
+
+
 ## Next
 
-**Deploy and exercise `places-proxy`.** Written and typechecked; nothing has
-called it against the live Places API.
+**Build the cold-start recognition grid and the shortlist screen as one
+chunk, grid first.** This is deliberate ordering, not preference.
 
-```bash
-psql "$ELSEWHERE_PG_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/20260920000012_google_quota.sql
-supabase secrets set GOOGLE_MAPS_API_KEY=...
-supabase functions deploy places-proxy
-```
+With zero rows in `place_verdicts` the shortlist has nothing in Layer 3 to
+rank on, so it falls back to sorting by distance — and spec §3 is explicit
+that distance is a gate, never a sort key. Twelve Valley View places span 0.2
+miles; ten Dallas places sit at 0.0. If the shortlist ships ordering by
+distance, that becomes the baseline everything is compared against and it
+never gets fixed.
 
-Then hydrate a real shortlist from `catalog_search` and check three things:
+The recognition grid (§8) needs only name, cuisine and distance — all of
+which `catalog_search` already returns — so it can be built first. Six taps
+writes six `known` verdicts, and the shortlist then has a real visited set on
+its first ever render.
 
-1. `quota.used_today` climbs by the expected amount — 2 calls for a place
-   needing resolution, 1 for one already resolved.
-2. `google_calls_per_session()` reports that session. If it does not, the
-   metric the spec says to alert on is not working, and it is much easier to
-   fix now than after launch.
-3. `live_status` distribution roughly matches the spike's ~73% — if `ok` is
-   far below that, something in the resolution path differs from the spike.
+In order:
 
-**Rebuild the APK.** The one on the phone has the truncated publishable key
-baked in, so it cannot connect. Fix the EAS variable first (see
-`docs/builds.md`), then `npx eas build -p android --profile preview`.
+1. **`catalog_search` returns `display_name`, `phone`, `update_time`.** The
+   gate: the data landed in the catalog on 2026-09-22 but nothing surfaces it.
+2. **Cold-start grid (§8).** "Which of these do you already know?" Every tap
+   writes `verdict = 'known'`.
+3. **Shortlist screen**, rebuilt with `PlaceCard` and the theme. Removes
+   `src/app/index.tsx` from `LEGACY_PRE_DESIGN` in
+   `scripts/check-no-colour-literals.py`.
+4. **Rural-exhausted state, built with the shortlist, not after it.** In
+   Valley View with 25 places "you've been to all four" is Tuesday, not an
+   edge case, and after six grid taps it is reachable immediately. It is also
+   the screen that demonstrates the product.
+5. **Review capture (§4)** after that. Until it exists nothing ever writes a
+   verdict other than `known`, and the twenty seeded tags stay unused.
 
-**Run the app.**
+**Expected sparseness is not a bug and must not be papered over.** The
+shortlist will render fewer card states than the harness does: frontier and
+stale ticks work (`update_time` is real), `Call ahead` works (phone is real),
+but reason lines are Layer 3 and there is almost nothing there yet. If a card
+has no honest reason, omit the line. Never substitute distance or a rating as
+filler.
 
-```bash
-cp .env.example .env     # fill in the two EXPO_PUBLIC_ values
-npm install
-npx expo start
-```
+### Known gaps, carried forward deliberately
 
-The Home screen should ask for location with an in-context rationale, then
-list real places near you, nearest first, with cuisines. No Google call
-happens anywhere on that screen and none ever should.
-
-It signs in **anonymously** on first launch. That is deliberate: every catalog
-RLS policy is `to authenticated` and `catalog_search` is granted to that role,
-so the app needs an identity before it can ask what is nearby. An anonymous
-session is a real `auth.uid()`, so RLS, the Google quota and Layer 3 history
-all work from first launch, and Supabase can convert it to a permanent
-account later without losing history. It also keeps the cold start at zero
-friction, which is the competitive point against Zest's Plaid wall (§10).
-
-**Then the rest of Phase 1:** filter sheet, shortlist hydration through
-`places-proxy`, place detail. Exit criteria is a real "where to eat" query
-returning 10 good cards under budget.
+- **`catalog_search` returns none of the new catalog fields.** Item 1 above.
+- **Five Nekter rows keep their store number** in `display_name`
+  (`8517 - Nekter Juice Bar`). The numeric-head guard prevents the worse
+  outcome (`8517`) but does not strip the prefix. Stripping it and keeping the
+  tail is a new rule nobody has specified.
+- **Co-location cannot scale yet.** The pass found 3 successor candidates —
+  including the known Dairy Queen → Tia's Tex-Mex at 42.6m — but from only
+  102 Google resolution attempts out of 39,304 places. The signal grows as
+  hydration happens; there is nothing to fix.
+- **Duplicate catalog rows** that resolve to one `google_place_id` are
+  flagged, not deduplicated. **`display_name` must NEVER be a dedup key.**
+  Name cleaning merges 39 groups of distinct originals — `Crumbl` covers 27
+  distinct names across 29 rows, `HTeaO` covers 20, and `Simply South -
+  Indian Vegetarian Restaurant` appears 3 times. Those are real, distinct
+  places; the meta line disambiguates them on the card. Deduplicating on the
+  cleaned name would delete them.
+- **Judging a non-destination pattern: the test is semantic ambiguity, not
+  hit count.** `warehouse` was dropped (0037) because "The Warehouse" is a
+  plausible bar name — the pattern is unsound at any volume, and a hundred
+  correct hits would not make it safe. `bitcoin atm`, `roasting facility`,
+  `commissary` and `distribution` were kept on 1–2 hits each, because those
+  words do not land in a restaurant's name by accident. Apply the same test
+  to any pattern proposed later; measured hit rate is corroboration, never
+  the argument.
+- **Ranking moves into `catalog_search`** with §15 thresholds held in a
+  tuning table, when Dallas pool sizes get uncomfortable. Recorded, not
+  scheduled. The interim is ordering the pool by `update_time desc, id`,
+  which is unbiased with respect to distance — but measured, it does not
+  discriminate much either: 647 of the top 1000 Dallas rows share one bulk
+  timestamp, so the tie-break falls through to `id` and truncation is
+  effectively arbitrary within that block. Unbiased was the goal; "freshest
+  first" is not what it actually delivers in dense areas.
+- **Quota day boundary is UTC**, so it resets at 7pm Central. Needs a
+  timezone on `profiles`.
+- **32 low-confidence brand mappings** are still `reviewed = false`.
+- **No connections model.** `place_verdicts` RLS is self-only; §4 wants
+  one-hop visibility. Widening it is a deliberate future migration.
+- **Overture releases are not being archived.** Spec §12 says start now: the
+  2026-07-22.0 prefix exists but its data is gone, so today's release is the
+  only diffable one. Until archiving starts, `New around here` stays unset in
+  `src/config/tuning.ts`.
 
 ### Stale catalog entries are a real problem, and chains betray them
 

@@ -43,6 +43,7 @@ export const family = {
   screen: "Fraunces-Screen",
   card: "Fraunces-Card",
   voice: "Fraunces-Voice",
+  tile: "Fraunces-Tile",
 
   regular: "Archivo-Regular",
   medium: "Archivo-Medium",
@@ -154,6 +155,35 @@ export const type = {
     fontSize: 12,
     lineHeight: 12,
   },
+  /**
+   * Recognition-grid tile name. Fraunces 15.5 / 1.16.
+   *
+   * From the canvas; the spec's type table stops at the card name.
+   *
+   * Its own cut at opsz 24, not the opsz-48 card cut rendered small. Optical
+   * sizing exists for exactly this: a display cut has strokes and spacing
+   * drawn to be seen large, and shrunk to 15.5px it reads fragile next to the
+   * cards. One extra static instance for one screen is normally a bad trade,
+   * but this is the first screen any user sees and twelve names in a grid
+   * means the type IS the screen.
+   */
+  recognition: {
+    fontFamily: family.tile,
+    fontSize: 15.5,
+    lineHeight: 17.98,
+  },
+  /** Cuisine under a grid tile. Archivo 11 / 1.4. */
+  tileMeta: {
+    fontFamily: family.regular,
+    fontSize: 11,
+    lineHeight: 15.4,
+  },
+  /** Primary action. Archivo 15.5 / 1.1, 700. From the canvas. */
+  button: {
+    fontFamily: family.bold,
+    fontSize: 15.5,
+    lineHeight: 17.05,
+  },
   /** Label / tick. Archivo 10.5 / 1.40, 700, tracking .13em, uppercase. */
   label: {
     fontFamily: family.bold,
@@ -205,6 +235,7 @@ export function useAppFonts(): [boolean, Error | null] {
     [family.screen]: require("@/assets/fonts/Fraunces-Screen.ttf"),
     [family.card]: require("@/assets/fonts/Fraunces-Card.ttf"),
     [family.voice]: require("@/assets/fonts/Fraunces-Voice.ttf"),
+    [family.tile]: require("@/assets/fonts/Fraunces-Tile.ttf"),
     [family.regular]: require("@/assets/fonts/Archivo-Regular.ttf"),
     [family.medium]: require("@/assets/fonts/Archivo-Medium.ttf"),
     [family.semibold]: require("@/assets/fonts/Archivo-SemiBold.ttf"),

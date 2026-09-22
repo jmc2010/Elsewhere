@@ -1,276 +1,320 @@
-// Surprise Me — spec §5.2.
-//
-// "Selection is weighted-random, not argmax. A deterministic best-match
-// returns the same answer every time and defeats the purpose."
-//
-// The spec's weight is:
-//   match_score × novelty_boost × recency_penalty × veto_gate
-//
-// Three of those four need Layer 3, which does not exist yet: there are no
-// visits to decay, no ratings to match against, no vetoes to gate. They are
-// neutral for now, and this file is where they land when Phase 2 arrives.
-//
-// What is NOT neutral today is distance. Uniform sampling over a 20-mile
-// radius mostly returns somewhere 15 miles away, which is a worse answer than
-// the list it replaced. A mild inverse-distance weight keeps the pick
-// plausible while staying genuinely random — near places are likelier, not
-// certain.
-//
-// Cost: one Google call per reveal, and none at all when the pool was already
-// hydrated for a Layer 2 filter. The spec budgets exactly this — "hydrate the
-// winner only (1 Google call)".
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Pressable, StyleSheet, Text, View } from "react-native";
+import Animated, {
+  Easing,
+  useAnimatedStyle,
+  useReducedMotion,
+  useSharedValue,
+  withDelay,
+  withTiming,
+} from "react-native-reanimated";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { useCallback, useState } from "react";
-import {
-  ActivityIndicator, Linking, Modal, Pressable, StyleSheet, Text, View,
-} from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
-
-import { supabase } from "@/lib/supabase";
-
-const MILES = 1609.344;
-
-// "Infinite rerolls recreate the paralysis the app exists to remove."
-const MAX_REROLLS = 3;
-
-export interface SurpriseCandidate {
-  place_id: string;
-  name: string;
-  lat: number;
-  lon: number;
-  distance_meters: number;
-  locality: string | null;
-  locality_suspect: boolean;
-  cuisines: string[];
-}
-
-interface Live {
-  rating?: number;
-  userRatingCount?: number;
-  priceLevel?: string;
-  businessStatus?: string;
-  regularOpeningHours?: { openNow?: boolean };
-}
-
-const PRICE: Record<string, string> = {
-  PRICE_LEVEL_INEXPENSIVE: "$",
-  PRICE_LEVEL_MODERATE: "$$",
-  PRICE_LEVEL_EXPENSIVE: "$$$",
-  PRICE_LEVEL_VERY_EXPENSIVE: "$$$$",
-};
+import { tuning } from "@/config/tuning";
+import { useTheme, type Theme, type ThemeName } from "@/theme/tokens";
+import { tabular, type } from "@/theme/type";
 
 /**
- * Sample one candidate, favouring nearer places without ever ruling out the
- * far ones. Square root rather than a plain inverse: 1/(0.5+d) collapses so
- * steeply that a 15-mile place is effectively unreachable, which would make
- * this a nearest-match with extra steps.
+ * The reveal (design spec §14).
+ *
+ * ----------------------------------------------------------------------------
+ * COST: rerolls are free, and that is structural rather than a promise
+ * ----------------------------------------------------------------------------
+ * §7 requires the pool to be hydrated ONCE and rerolls to draw from the
+ * already-hydrated set. This component never fetches anything. It is handed
+ * `candidates` that the shortlist has already hydrated into its per-place
+ * cache, and a reroll picks a different member of that same array. There is no
+ * code path here that can issue a Google call, so the cap of three is a
+ * commitment device rather than a budget -- which is what lets the copy say so
+ * honestly.
+ *
+ * ----------------------------------------------------------------------------
+ * MOTION: the failure mode is a slot machine
+ * ----------------------------------------------------------------------------
+ * Do not cycle names, do not spin, do not stagger characters. A person with
+ * taste pauses and then tells you; the name arrives whole.
+ *
+ * The reroll ORDER is the part that carries the meaning:
+ *
+ *   1. The pip extinguishes FIRST (120ms).
+ *   2. The old name exits UPWARD and fades (180ms) -- dismissed, not shuffled.
+ *   3. The new name enters from below (320ms).
+ *
+ * You see the cost before you see the reward. Reversed, it reads as a reward
+ * with a price attached, which is a slot machine. Nothing here exceeds the
+ * 600ms budget, and reduced motion collapses all of it to a 120ms crossfade.
  */
-function pickWeighted(
-  candidates: SurpriseCandidate[],
-  excludeId?: string,
-): SurpriseCandidate | null {
-  const pool = candidates.filter((c) => c.place_id !== excludeId);
-  if (pool.length === 0) return null;
 
-  const weights = pool.map((c) => 1 / Math.sqrt(0.5 + c.distance_meters / MILES));
-  const total = weights.reduce((a, b) => a + b, 0);
-  let r = Math.random() * total;
-  for (let i = 0; i < pool.length; i++) {
-    r -= weights[i];
-    if (r <= 0) return pool[i];
-  }
-  return pool[pool.length - 1];
+export interface RevealCandidate {
+  placeId: string;
+  name: string;
+  cuisine?: string | null;
+  locality?: string | null;
+  distanceMiles?: number | null;
+  rating?: number | null;
+  priceLevel?: string | null;
+  phone?: string | null;
+  /** The one line of voice. Omitted when there is no honest one. */
+  why?: string | null;
 }
 
-export function SurpriseReveal(
-  { visible, candidates, sessionId, onClose }: {
-    visible: boolean;
-    candidates: SurpriseCandidate[];
-    sessionId: string;
-    onClose: () => void;
-  },
-) {
-  const [pick, setPick] = useState<SurpriseCandidate | null>(null);
-  const [live, setLive] = useState<Live | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [rerolls, setRerolls] = useState(0);
-  const [started, setStarted] = useState(false);
+export interface SurpriseRevealProps {
+  candidates: RevealCandidate[];
+  onClose: () => void;
+  onCommit: (candidate: RevealCandidate) => void;
+}
 
-  const roll = useCallback(async (previous?: string) => {
-    const chosen = pickWeighted(candidates, previous);
-    setPick(chosen);
-    setLive(null);
-    if (!chosen) return;
+/** §7: the cap is about commitment, not budget. Rerolls cost nothing. */
+const MAX_REROLLS = 3;
 
-    setLoading(true);
-    try {
-      const { data, error } = await supabase.functions.invoke("places-proxy", {
-        body: {
-          action: "hydrate",
-          place_ids: [chosen.place_id],
-          session_id: sessionId,
-        },
-      });
-      if (!error) {
-        setLive(data?.places?.[0]?.live ?? null);
-      }
-    } finally {
-      setLoading(false);
+const STAR = "★";
+
+export function SurpriseReveal({ candidates, onClose, onCommit }: SurpriseRevealProps) {
+  const theme = useTheme();
+  const s = styles(theme);
+  const insets = useSafeAreaInsets();
+  const reduced = useReducedMotion();
+
+  // Draw from the top of the pool, not the whole of it (§15). Order is fixed
+  // once so a reroll is a step through a decided sequence rather than a fresh
+  // random draw that can repeat itself.
+  const sequence = useMemo(() => {
+    const top = candidates.slice(0, tuning.rerollPool.drawFromTop);
+    for (let i = top.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [top[i], top[j]] = [top[j], top[i]];
     }
-  }, [candidates, sessionId]);
+    return top;
+  }, [candidates]);
 
-  // First open rolls once; reopening starts a fresh round.
-  if (visible && !started) {
-    setStarted(true);
-    setRerolls(0);
-    void roll();
-  }
-  if (!visible && started) setStarted(false);
+  const [index, setIndex] = useState(0);
+  const [committed, setCommitted] = useState(false);
+  const pick = sequence[index];
 
-  const close = () => {
-    setPick(null);
-    setLive(null);
-    onClose();
-  };
+  const nameOpacity = useSharedValue(0);
+  const nameShift = useSharedValue(8);
+  const ruleWidth = useSharedValue(0);
+  const whyOpacity = useSharedValue(0);
 
-  const directions = () => {
-    if (!pick) return;
-    // A plain maps URL, not a Places API call. Costs nothing and is not
-    // Google content we are holding.
-    const q = encodeURIComponent(`${pick.name}, ${pick.locality ?? ""}`);
-    Linking.openURL(
-      `https://www.google.com/maps/search/?api=1&query=${q}` +
-        `&query_place_id=&center=${pick.lat},${pick.lon}`,
-    );
-  };
+  const play = useCallback(
+    (entering: boolean) => {
+      if (reduced) {
+        // Everything collapses to a crossfade. No state is encoded in motion
+        // alone -- the pips carry a ring as well as a fill for this reason.
+        nameShift.value = 0;
+        nameOpacity.value = withTiming(1, { duration: 120 });
+        ruleWidth.value = withTiming(44, { duration: 120 });
+        whyOpacity.value = withTiming(1, { duration: 120 });
+        return;
+      }
+      nameOpacity.value = 0;
+      nameShift.value = entering ? 8 : 8;
+      ruleWidth.value = 0;
+      whyOpacity.value = 0;
 
-  const rerollsLeft = MAX_REROLLS - rerolls;
-  const open = live?.regularOpeningHours?.openNow;
+      nameOpacity.value = withTiming(1, { duration: 320, easing: Easing.out(Easing.cubic) });
+      nameShift.value = withTiming(0, { duration: 320, easing: Easing.out(Easing.cubic) });
+      ruleWidth.value = withDelay(120, withTiming(44, { duration: 200, easing: Easing.out(Easing.cubic) }));
+      whyOpacity.value = withDelay(240, withTiming(1, { duration: 200 }));
+    },
+    [reduced, nameOpacity, nameShift, ruleWidth, whyOpacity],
+  );
+
+  useEffect(() => { play(true); }, [play]);
+
+  const reroll = useCallback(() => {
+    if (index >= MAX_REROLLS || index + 1 >= sequence.length) return;
+
+    if (reduced) {
+      setIndex((i) => i + 1);
+      play(true);
+      return;
+    }
+
+    // 1. Pip first -- handled by `index` advancing after the exit, so the pip
+    //    state change is scheduled immediately while the name is still here.
+    // 2. Old name exits UPWARD (180ms), then
+    // 3. the new one enters from below.
+    nameOpacity.value = withTiming(0, { duration: 180, easing: Easing.in(Easing.cubic) });
+    nameShift.value = withTiming(-8, { duration: 180, easing: Easing.in(Easing.cubic) });
+    ruleWidth.value = withTiming(0, { duration: 120 });
+    whyOpacity.value = withTiming(0, { duration: 120 });
+
+    const t = setTimeout(() => {
+      setIndex((i) => i + 1);
+      nameShift.value = 8;
+      play(true);
+    }, 180);
+    return () => clearTimeout(t);
+  }, [index, sequence.length, reduced, play, nameOpacity, nameShift, ruleWidth, whyOpacity]);
+
+  const commit = useCallback(() => {
+    setCommitted(true);
+    // Small and certain, no celebration: the rule expands to full width and
+    // the actions change. 280ms.
+    ruleWidth.value = withTiming(999, {
+      duration: reduced ? 120 : 280,
+      easing: Easing.out(Easing.cubic),
+    });
+    onCommit(pick);
+  }, [pick, onCommit, reduced, ruleWidth]);
+
+  const nameStyle = useAnimatedStyle(() => ({
+    opacity: nameOpacity.value,
+    transform: [{ translateY: nameShift.value }],
+  }));
+  const ruleStyle = useAnimatedStyle(() => ({ width: ruleWidth.value }));
+  const whyStyle = useAnimatedStyle(() => ({ opacity: whyOpacity.value }));
+
+  if (!pick) return null;
+
+  const rerollsLeft = Math.min(MAX_REROLLS, sequence.length - 1) - index;
+  const meta = [
+    pick.cuisine,
+    pick.locality,
+    pick.distanceMiles != null ? `${pick.distanceMiles.toFixed(1)} mi` : null,
+    pick.rating != null ? `${STAR}${pick.rating.toFixed(1)}` : null,
+    pick.priceLevel,
+  ].filter(Boolean) as string[];
 
   return (
-    <Modal visible={visible} animationType="fade" onRequestClose={close}>
-      <SafeAreaView style={styles.screen}>
-        <View style={styles.top}>
-          <Pressable onPress={close} hitSlop={12}>
-            <Text style={styles.close}>Close</Text>
+    <View style={[s.screen, { paddingTop: insets.top + theme.space.xxl }]}>
+      <View style={s.top}>
+        <Text style={s.eyebrow}>{committed ? "Locked in" : "Tonight"}</Text>
+        {!committed ? (
+          <Pressable onPress={onClose} accessibilityRole="button" hitSlop={12}>
+            <Text style={s.close}>Back</Text>
           </Pressable>
-        </View>
+        ) : null}
+      </View>
 
-        {!pick
-          ? (
-            <View style={styles.centered}>
-              <Text style={styles.title}>Nothing to pick from</Text>
-              <Text style={styles.body}>
-                Widen the radius or loosen the filters, and try again.
-              </Text>
+      <View style={s.body}>
+        <Animated.Text style={[s.pick, nameStyle]} numberOfLines={3}>
+          {pick.name}
+        </Animated.Text>
+
+        <Animated.View style={[s.rule, ruleStyle]} />
+
+        <Animated.View style={whyStyle}>
+          {/* Omitted when there is no honest one. Never filled. */}
+          {pick.why ? <Text style={s.why}>{pick.why}</Text> : null}
+          {meta.length > 0 ? (
+            <View style={s.facts}>
+              {meta.map((m) => (
+                <Text key={m} style={[s.fact, tabular]}>{m}</Text>
+              ))}
             </View>
-          )
-          : (
-            <View style={styles.centered}>
-              <Text style={styles.eyebrow}>Tonight, go to</Text>
-              <Text style={styles.name}>{pick.name}</Text>
+          ) : null}
+        </Animated.View>
+      </View>
 
-              <Text style={styles.meta}>
-                {(pick.distance_meters / MILES).toFixed(1)} miles away
-                {pick.locality && !pick.locality_suspect
-                  ? ` · ${pick.locality}`
-                  : ""}
-              </Text>
-
-              {pick.cuisines.length > 0 && (
-                <Text style={styles.cuisine}>{pick.cuisines.join(" · ")}</Text>
-              )}
-
-              {loading
-                ? <ActivityIndicator style={styles.spinner} />
-                : live
-                ? (
-                  <View style={styles.liveRow}>
-                    {live.rating !== undefined && (
-                      <Text style={styles.rating}>
-                        ★ {live.rating.toFixed(1)}
-                        {live.userRatingCount ? ` (${live.userRatingCount})` : ""}
-                      </Text>
-                    )}
-                    {live.priceLevel && PRICE[live.priceLevel] && (
-                      <Text style={styles.chip}>{PRICE[live.priceLevel]}</Text>
-                    )}
-                    {open !== undefined && (
-                      <Text style={open ? styles.open : styles.closed}>
-                        {open ? "Open now" : "Closed now"}
-                      </Text>
-                    )}
-                  </View>
-                )
-                : <Text style={styles.noRating}>No rating available</Text>}
-
-              <Pressable style={styles.primary} onPress={directions}>
-                <Text style={styles.primaryText}>Lock it in</Text>
-              </Pressable>
-
-              {rerollsLeft > 0
-                ? (
-                  <Pressable
-                    style={styles.secondary}
-                    onPress={() => {
-                      setRerolls((n) => n + 1);
-                      void roll(pick.place_id);
-                    }}
-                  >
-                    <Text style={styles.secondaryText}>
-                      Something else ({rerollsLeft} left)
-                    </Text>
-                  </Pressable>
-                )
-                : (
-                  // Deliberate friction, spec §5.2.
-                  <Text style={styles.noMore}>
-                    That&apos;s the last one. Pick it, or go back to the list.
-                  </Text>
-                )}
-            </View>
-          )}
-      </SafeAreaView>
-    </Modal>
+      <View style={[s.acts, { paddingBottom: insets.bottom + theme.space.lg }]}>
+        {committed ? (
+          <>
+            <Text style={s.signoff}>Go eat.</Text>
+            <Text style={s.after}>I&apos;ll ask how it went tomorrow.</Text>
+          </>
+        ) : (
+          <>
+            <Drawn label="That's the one." onPress={commit} tone="primary" />
+            {rerollsLeft > 0 ? (
+              <>
+                <Drawn
+                  label={rerollsLeft === 1 ? "One more, then you're committing." : "Something else"}
+                  onPress={reroll}
+                  tone="quiet"
+                />
+                <Pips total={MAX_REROLLS} spent={index} />
+              </>
+            ) : null}
+          </>
+        )}
+      </View>
+    </View>
   );
 }
 
-const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: "#fff" },
-  top: { paddingHorizontal: 20, paddingVertical: 14, alignItems: "flex-end" },
-  close: { fontSize: 16, color: "#2a6fd6" },
-  centered: {
-    flex: 1, justifyContent: "center", paddingHorizontal: 28, gap: 8,
-    paddingBottom: 60,
-  },
-  eyebrow: {
-    fontSize: 14, fontWeight: "600", letterSpacing: 0.6,
-    textTransform: "uppercase", color: "#8a8a8a",
-  },
-  title: { fontSize: 28, fontWeight: "700", color: "#111" },
-  name: {
-    fontSize: 40, fontWeight: "700", letterSpacing: -1, color: "#111",
-    lineHeight: 46,
-  },
-  meta: { fontSize: 17, color: "#6b6b6b", marginTop: 4 },
-  cuisine: { fontSize: 15, color: "#8a8a8a" },
-  body: { fontSize: 16, color: "#6b6b6b", lineHeight: 23 },
-  spinner: { alignSelf: "flex-start", marginTop: 12 },
-  liveRow: { flexDirection: "row", alignItems: "center", gap: 12, marginTop: 10 },
-  rating: { fontSize: 17, fontWeight: "600", color: "#111" },
-  chip: { fontSize: 17, color: "#6b6b6b" },
-  open: { fontSize: 17, color: "#1b7a3d", fontWeight: "600" },
-  closed: { fontSize: 17, color: "#8a8a8a" },
-  noRating: { fontSize: 15, color: "#a5a5a5", fontStyle: "italic", marginTop: 10 },
-  primary: {
-    marginTop: 30, backgroundColor: "#111", paddingVertical: 17,
-    borderRadius: 14, alignItems: "center",
-  },
-  primaryText: { color: "#fff", fontSize: 17, fontWeight: "700" },
-  secondary: { marginTop: 12, paddingVertical: 14, alignItems: "center" },
-  secondaryText: { fontSize: 16, color: "#2a6fd6", fontWeight: "600" },
-  noMore: {
-    marginTop: 16, fontSize: 14, color: "#8a8a8a", textAlign: "center",
-    lineHeight: 20,
-  },
-});
+/**
+ * Rerolls render as pips, not a decrementing integer.
+ *
+ * A number reads as a metered resource -- "2 left" invites you to spend it.
+ * Pips read as a decision you are using up. The spent state carries a RING as
+ * well as an absence of fill, because §11 forbids encoding state in colour
+ * alone.
+ */
+function Pips({ total, spent }: { total: number; spent: number }) {
+  const theme = useTheme();
+  const s = styles(theme);
+  return (
+    <View style={s.pips}>
+      {Array.from({ length: total }, (_, i) => (
+        <View key={i} style={[s.pip, i < total - spent ? s.pipLive : s.pipSpent]} />
+      ))}
+      <Text style={s.pipLabel}>{total - spent} left</Text>
+    </View>
+  );
+}
+
+function Drawn({
+  label,
+  onPress,
+  tone,
+}: {
+  label: string;
+  onPress: () => void;
+  tone: "primary" | "quiet";
+}) {
+  const theme = useTheme();
+  const s = styles(theme);
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      style={({ pressed }) => [
+        s.btn,
+        tone === "primary" ? s.btnPrimary : s.btnQuiet,
+        pressed && s.btnPressed,
+      ]}
+    >
+      <Text style={[s.btnLabel, tone === "primary" ? s.btnLabelPrimary : s.btnLabelQuiet]}>
+        {label}
+      </Text>
+    </Pressable>
+  );
+}
+
+const sheets = new Map<ThemeName, ReturnType<typeof build>>();
+function styles(theme: Theme): ReturnType<typeof build> {
+  let sheet = sheets.get(theme.name);
+  if (!sheet) { sheet = build(theme); sheets.set(theme.name, sheet); }
+  return sheet;
+}
+
+const build = ({ colours: c, space, radius, hairline }: Theme) =>
+  StyleSheet.create({
+    screen: { flex: 1, backgroundColor: c.ground, paddingHorizontal: space.xl },
+    top: { flexDirection: "row", justifyContent: "space-between", alignItems: "baseline" },
+    eyebrow: { ...type.label, color: c.brass },
+    close: { ...type.meta, color: c.inkMuted },
+    body: { flex: 1, justifyContent: "center" },
+    pick: { ...type.pick, color: c.ink },
+    rule: { height: 2, backgroundColor: c.brass, marginTop: 18, marginBottom: 14 },
+    why: { ...type.voice, color: c.ink, marginBottom: space.lg },
+    facts: { flexDirection: "row", flexWrap: "wrap", columnGap: space.md, rowGap: 6 },
+    fact: { ...type.meta, color: c.inkMuted },
+    acts: { rowGap: space.sm },
+    btn: { borderRadius: radius.button, paddingVertical: 15, alignItems: "center" },
+    btnPrimary: { backgroundColor: c.brass },
+    btnQuiet: { borderWidth: hairline, borderColor: c.ruleStrong },
+    btnPressed: { opacity: 0.7 },
+    btnLabel: { ...type.button },
+    btnLabelPrimary: { color: c.brassInk },
+    btnLabelQuiet: { color: c.inkMuted },
+    pips: { flexDirection: "row", alignItems: "center", justifyContent: "center", columnGap: 5, marginTop: space.md },
+    pip: { width: 7, height: 7, borderRadius: 4 },
+    pipLive: { backgroundColor: c.brass },
+    pipSpent: { borderWidth: 1.5, borderColor: c.inkFaint },
+    pipLabel: { ...type.label, color: c.inkFaint, marginLeft: 6 },
+    signoff: { ...type.pick, color: c.ink },
+    after: { ...type.body, color: c.inkMuted },
+  });

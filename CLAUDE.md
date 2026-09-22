@@ -80,6 +80,59 @@ Consequences for anyone building features here:
 - Cold start matters competitively. Onboarding that seeds Layer 3 quickly is
   high-priority work.
 
+## Before stopping: rewrite the Next section
+
+**At the end of every session, rewrite the `## Next` section of
+[`docs/STATUS.md`](docs/STATUS.md) before stopping.** Not "if something
+changed" -- every session.
+
+That file is the resume point; a session typically begins by reading it and
+picking up from `Next`. When it goes stale it does not fail loudly, it just
+quietly describes work that was finished days ago, and the next session starts
+by doing the wrong thing or by spending its first minutes working out that the
+instructions are fiction. It has already happened once: `Next` still said to
+deploy `places-proxy` and build the first APK long after both were done.
+
+What `Next` must contain when you stop:
+
+- The single next action, specific enough to start from cold.
+- Anything applied to the live database that is not obvious from the
+  migrations directory.
+- Anything deliberately left undone, and why -- a known gap is information, a
+  forgotten one is a bug.
+
+Move finished work into `## Done` rather than deleting it. The record of what
+was tried and rejected is worth more than a tidy file.
+
+## Handoff block
+
+End every completed chunk of work with a block in exactly this format, fenced
+so it can be copied in one selection. Most fields will be "None" — that is what
+keeps it short. Be terse. No code diffs, no narrative of the work.
+
+```
+## HANDOFF
+**Done:** files and migrations touched, one line each, semantic not literal
+**Now possible:** what the app can do that it couldn't before
+**Spec conflicts:** section number + what reality said. The spec is
+  authoritative, so if it is wrong, this is where it gets corrected. "None"
+  if none.
+**Chose for you:** decisions made because the spec was silent. Every one.
+  This is where drift enters, so err toward listing it. "None" if none.
+**Numbers:** real counts, distributions, before/after samples. Raw values,
+  not characterisations — "2,076 rows (5.3%)", never "a small number".
+**Blocked:** what is waiting, and on what
+**Skipped:** deliberately not done, and why
+```
+
+Two rules about it:
+
+- **"Spec conflicts" and "Chose for you" are the two that matter.** A chunk
+  that reports "None" for both when it actually made a judgment call is worse
+  than no block at all.
+- **Do not soften numbers.** If the name-cleaning rule mangles 40 of the 489
+  long names, say 40 and show three of them.
+
 ## Conventions
 
 - TypeScript strict mode throughout.

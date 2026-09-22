@@ -58,9 +58,14 @@ export const supabase = createClient(url, publishableKey, {
  * shown them a single restaurant is exactly the friction Zest's Plaid wall
  * suffers from.
  */
-export async function ensureSession(): Promise<void> {
+export async function ensureSession(): Promise<string> {
   const { data } = await supabase.auth.getSession();
-  if (data.session) return;
-  const { error } = await supabase.auth.signInAnonymously();
+  if (data.session) return data.session.user.id;
+
+  const { data: signedIn, error } = await supabase.auth.signInAnonymously();
   if (error) throw error;
+  if (!signedIn.session) {
+    throw new Error("Anonymous sign-in returned no session.");
+  }
+  return signedIn.session.user.id;
 }

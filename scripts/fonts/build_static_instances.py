@@ -149,6 +149,16 @@ INSTANCES: list[tuple[str, str, dict[str, float]]] = [
     ("Fraunces-Screen", "Fraunces-VF.ttf",        {"opsz":  60, "wght": 620, "SOFT": 36, "WONK": 1}),
     ("Fraunces-Card",   "Fraunces-VF.ttf",        {"opsz":  48, "wght": 600, "SOFT": 34, "WONK": 1}),
     ("Fraunces-Voice",  "Fraunces-Italic-VF.ttf", {"opsz":  36, "wght": 400, "SOFT": 60, "WONK": 1}),
+    # Sixth cut, for the cold-start recognition grid. From the canvas, which
+    # sets tile names at opsz 24 -- not in the spec's type table, which stops
+    # at the card name.
+    #
+    # Worth its ~71KB even though it serves one screen. Optical sizing exists
+    # for precisely this: the opsz-48 card cut has strokes and spacing drawn
+    # for display use, and rendered at 15.5px it reads fragile. That screen is
+    # the first one any user sees, and twelve names in a grid means the type
+    # IS the screen -- there is nothing else on it to carry the weight.
+    ("Fraunces-Tile",   "Fraunces-VF.ttf",        {"opsz":  24, "wght": 600, "SOFT": 34, "WONK": 0}),
 
     # Archivo -- interface, data, labels. wdth stays at 100 throughout; the
     # spec uses no condensed or extended setting.
