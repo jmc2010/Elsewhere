@@ -303,6 +303,38 @@ right and a correction path for the rest beats a rule chasing 99%.
 If a refinement is proposed in future, the answer is no unless it comes with
 a measured before/after over the whole catalog AND names the rows it breaks.
 
+### Open licensing question: caching Google responses in memory
+
+Place detail calls the Atmosphere SKU, and it fires on every open — so
+tapping between two places would charge for the same place twice. The
+response is now held in the TanStack query cache for the life of a foreground
+session and dropped when the app backgrounds (`src/app/_layout.tsx`).
+
+**This is flagged rather than settled.** The Google Maps Platform Terms permit
+caching `place_id` indefinitely and very little else. Holding a response in
+memory for minutes inside one screen session reads as request scope rather
+than storage — no persister is configured, nothing reaches disk, and it is
+gone on background — but that is a reading, not a ruling. Worth checking
+against the current terms before the user base is larger than one.
+
+What it is NOT: nothing Google returns is written to the database. The
+mechanical guard in `scripts/check-no-google-persistence.py` still holds and
+still passes.
+
+**Cost note, measured from the code rather than assumed:** a detail open on an
+already-resolved place costs 1 call; on an unresolved one it costs 2
+(searchText + details). Only 76 of 39,304 places are resolved, so almost every
+detail open currently costs 2. Both are budgeted against
+`places.details.enterprise_atmosphere` even though one is really a Text
+Search, which over-reports Atmosphere and under-reports searchText. Worth
+fixing if SKU-level cost attribution ever matters.
+
+Detail calls carry a `detail-` session id, so the real number is a query:
+
+```sql
+select sum(call_count) from google_api_usage where session_id like 'detail-%';
+```
+
 ### Known gaps, carried forward deliberately
 
 - **`catalog_search` returns none of the new catalog fields.** Item 1 above.

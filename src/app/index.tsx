@@ -667,7 +667,9 @@ function Shortlist() {
               {shortlist.map((p, i) => (
                 <PlaceCard
                   key={p.place_id}
-                  {...toCard(p, liveById.get(p.place_id))}
+                  {...toCard(p, liveById.get(p.place_id), () =>
+                    router.push(`/place/${p.place_id}`),
+                  )}
                   isFirst={i === 0}
                   // §13: card tap pushes detail. The whole row is the target.
                   onPress={() => router.push(`/place/${p.place_id}`)}
@@ -708,7 +710,11 @@ function Shortlist() {
  * the tag affinity and friend verdicts that produce real reasons do not exist
  * yet. That sparseness is the honest state and it is meant to show.
  */
-function toCard(p: CatalogPlace, hydrated: HydratedPlace | undefined): PlaceCardProps {
+function toCard(
+  p: CatalogPlace,
+  hydrated: HydratedPlace | undefined,
+  onCorrect?: () => void,
+): PlaceCardProps {
   const live = hydrated?.live ?? null;
 
   let tick: Tick | null = null;
@@ -734,7 +740,7 @@ function toCard(p: CatalogPlace, hydrated: HydratedPlace | undefined): PlaceCard
       kind: "caution",
       text: "Might have changed hands — nothing's confirmed it since 2024.",
     };
-    action = { label: "Still there?", tone: "plain" };
+    action = { label: "Still there?", tone: "plain", onPress: onCorrect };
     tick = null;
   } else if (p.opening_soon) {
     reason = { kind: "frontier", text: "Not open yet, going by the name." };

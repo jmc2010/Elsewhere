@@ -1,11 +1,12 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Image } from "expo-image";
 import { router, useLocalSearchParams } from "expo-router";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { ActivityIndicator, Linking, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { supabase } from "@/lib/supabase";
+import { CorrectionSheet, type CorrectionResult } from "@/components/CorrectionSheet";
+import { ensureSession, supabase } from "@/lib/supabase";
 import { palettes, ThemeProvider, useTheme, type Theme, type ThemeName } from "@/theme/tokens";
 import { tabular, type, useAppFonts } from "@/theme/type";
 
@@ -71,6 +72,14 @@ const PRICE: Record<string, string> = {
   PRICE_LEVEL_VERY_EXPENSIVE: "$$$$",
 };
 
+/**
+ * One id for the life of this JS bundle instance, so every Atmosphere call
+ * made from a detail screen can be counted together:
+ *
+ *   select sum(call_count) from google_api_usage where session_id like 'detail-%';
+ */
+const detailSessionId = `detail-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
 const VERDICT_LABEL: Record<string, string> = {
   again: "You'd go again",
   fine: "It was fine",
@@ -96,6 +105,8 @@ function PlaceDetail() {
   const theme = useTheme();
   const s = styles(theme);
   const insets = useSafeAreaInsets();
+  const qc = useQueryClient();
+  const [correcting, setCorrecting] = useState(false);
 
   const detail = useQuery({
     queryKey: ["place_detail", id],
@@ -113,16 +124,54 @@ function PlaceDetail() {
   const live = useQuery({
     queryKey: ["place_live", id],
     enabled: !!id,
-    gcTime: 5 * 60 * 1000,
+    // Never refetched within a foreground session. Re-opening the same place
+    // must not charge the Atmosphere SKU a second time -- see _layout.tsx for
+    // why this is a cache and not storage, and when it is cleared.
+    staleTime: Infinity,
+    gcTime: Infinity,
+    retry: false,
     queryFn: async (): Promise<GoogleLive | null> => {
       const { data, error } = await supabase.functions.invoke("places-proxy", {
-        body: { action: "detail", place_ids: [id] },
+        // session_id makes the call attributable in google_api_usage, which
+        // is how "one open, how many calls?" gets answered with a query
+        // instead of an assumption.
+        body: { action: "detail", place_ids: [id], session_id: detailSessionId },
       });
       if (error) throw error;
       const first = (data as { places?: { live: GoogleLive | null }[] })?.places?.[0];
       return first?.live ?? null;
     },
   });
+
+  const correct = useMutation({
+    mutationFn: async (r: CorrectionResult) => {
+      const userId = await ensureSession();
+      // Writes to place_corrections and NOWHERE else. A correction is a claim
+      // about the world; place_verdicts holds claims about you. Mixing them
+      // would record that you disliked somewhere you merely reported closed.
+      const { error } = await supabase.from("place_corrections").upsert(
+        { user_id: userId, place_id: id, kind: r.kind, new_name: r.newName },
+        { onConflict: "user_id,place_id" },
+      );
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      setCorrecting(false);
+      void qc.invalidateQueries({ queryKey: ["place_detail", id] });
+      void qc.invalidateQueries({ queryKey: ["catalog_search"] });
+    },
+  });
+
+  if (correcting && detail.data) {
+    return (
+      <CorrectionSheet
+        placeName={detail.data.display_name}
+        busy={correct.isPending}
+        onCancel={() => setCorrecting(false)}
+        onSubmit={(r) => correct.mutate(r)}
+      />
+    );
+  }
 
   if (detail.isPending) {
     return <View style={s.centre}><ActivityIndicator color={theme.colours.brass} /></View>;
@@ -208,13 +257,16 @@ function PlaceDetail() {
         {/* §5: a rename is the highest-value contribution in the app -- it
             repairs the row AND unlocks the Google match from then on. */}
         <Pressable
-          onPress={() => {}}
+          onPress={() => setCorrecting(true)}
           accessibilityRole="button"
           style={({ pressed }) => [s.correct, pressed && s.pressed]}
         >
           <Text style={s.correctLabel}>Still there?</Text>
-          <Text style={s.quiet}>Tell us if it&apos;s gone, renamed, or not somewhere you eat.</Text>
+          <Text style={s.quiet}>Tell me if it&apos;s gone, renamed, or not somewhere you eat.</Text>
         </Pressable>
+        {correct.isError ? (
+          <Text style={s.quiet}>Couldn&apos;t send that: {(correct.error as Error).message}</Text>
+        ) : null}
 
         {live.isPending ? (
           <View style={s.google}><ActivityIndicator color={theme.colours.inkFaint} /></View>
