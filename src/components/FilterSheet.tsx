@@ -1,286 +1,237 @@
-// The filter sheet — spec §5.1's workhorse.
-//
-// Only Layer 1 and Layer 3 filters live here. Rating, price and open-now are
-// Layer 2: we do not hold that data until a shortlist is hydrated, so they
-// cannot narrow the query and must be applied after. Putting them in this
-// sheet would imply the catalog can answer them, and it cannot.
-//
-// Cuisine is hierarchical. Selecting a GROUP means all of its leaves
-// (per the taxonomy seed), and catalog_search expands group slugs server-side
-// so the client sends whichever the user actually tapped.
+import { useCallback, useState } from "react";
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
-import {
-  ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Switch, Text,
-  View,
-} from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { useTheme, type Theme, type ThemeName } from "@/theme/tokens";
+import { type } from "@/theme/type";
 
-import { supabase } from "@/lib/supabase";
+/**
+ * The filter sheet (design spec §6).
+ *
+ * Four rules, none of them cosmetic:
+ *
+ * 1. **Only cuisine groups actually present, each with its count.** Fifteen
+ *    groups in a twelve-place town is a screen of dead ends, and a filter
+ *    that returns nothing teaches people not to filter. Counts come from
+ *    `catalog_cuisine_counts`, server-side, so they are the real numbers and
+ *    not a count of the capped pool.
+ *
+ * 2. **No star floor.** It contradicts the card -- which sets a rating as one
+ *    quiet numeral precisely because it is an attribute and not a verdict --
+ *    and it promotes well-documented chains over the independents the product
+ *    exists to surface. Roughly 30% of the catalog has no rating at all, and
+ *    a floor silently deletes all of them.
+ *
+ * 3. **Uncategorised is never silently swallowed.** A cuisine filter excludes
+ *    the rows with no cuisine, which is honest, but it is never offered as a
+ *    group to filter *on*, because "Uncategorised" is not a thing anybody
+ *    wants to eat.
+ *
+ * 4. **The sheet commits ONCE, on dismissal.** No live re-render as toggles
+ *    change. It is cheaper, and it is the only version usable in a moving
+ *    vehicle -- a list reflowing under a thumb at 60mph is not a control.
+ *
+ * Nothing here is a platform component. The pills and the toggle are drawn.
+ */
+
+export interface CuisineGroup {
+  slug: string;
+  label: string;
+  place_count: number;
+}
+
+/** A tag the user has actually used. Mood filters are yours, and free. */
+export interface MoodTag {
+  key: string;
+  label: string;
+  used: number;
+}
 
 export interface Filters {
-  radiusMiles: number;
   cuisines: string[];
-  /** Layer 2. Applied after hydration, not in catalog_search. */
-  minRating: number | null;
-  /** An unrated place is not a badly-rated one, so it is kept by default. */
-  includeUnrated: boolean;
-  /** Layer 2, like minRating. A closed restaurant is useless at any rating. */
+  moodTags: string[];
   openNow: boolean;
 }
 
-export const DEFAULT_FILTERS: Filters = {
-  radiusMiles: 20,
-  cuisines: [],
-  minRating: null,
-  includeUnrated: true,
-  openNow: false,
-};
+export const DEFAULT_FILTERS: Filters = { cuisines: [], moodTags: [], openNow: false };
 
-const RATINGS: { label: string; value: number | null }[] = [
-  { label: "Any", value: null },
-  { label: "3.5+", value: 3.5 },
-  { label: "4.0+", value: 4.0 },
-  { label: "4.5+", value: 4.5 },
-];
-
-// Deliberately coarse. A slider invites fiddling, and the decision window is
-// ~90 seconds (spec §3) -- four taps covers the real range from "in town" to
-// "worth the drive".
-const RADII = [5, 10, 20, 50];
-
-interface CuisineRow {
-  id: number;
-  slug: string;
-  label: string;
-  parent_id: number | null;
+export interface FilterSheetProps {
+  groups: CuisineGroup[];
+  moods: MoodTag[];
+  initial: Filters;
+  /** Called once, on dismissal, with the final state. */
+  onCommit: (next: Filters) => void;
+  onCancel: () => void;
 }
 
-export function FilterSheet(
-  { visible, filters, onApply, onClose }: {
-    visible: boolean;
-    filters: Filters;
-    onApply: (f: Filters) => void;
-    onClose: () => void;
-  },
-) {
-  const [draft, setDraft] = useState<Filters>(filters);
+export function FilterSheet({ groups, moods, initial, onCommit, onCancel }: FilterSheetProps) {
+  const theme = useTheme();
+  const s = styles(theme);
+  const insets = useSafeAreaInsets();
 
-  const cuisines = useQuery({
-    queryKey: ["cuisines"],
-    // The taxonomy changes only with a migration, so there is no reason to
-    // refetch it during a session.
-    staleTime: Infinity,
-    // Flat select rather than an embedded parent: PostgREST returns embedded
-    // resources as arrays, which supabase-js then types awkwardly, and the
-    // parent is only needed to tell groups from leaves.
-    queryFn: async (): Promise<CuisineRow[]> => {
-      const { data, error } = await supabase
-        .from("cuisines")
-        .select("id, slug, label, parent_id")
-        .order("label");
-      if (error) throw error;
-      return (data ?? []) as CuisineRow[];
-    },
-  });
+  // Local until dismissal. This is what "commits once" means in practice --
+  // the parent's filters do not change while the sheet is open, so nothing
+  // behind it can reflow.
+  const [draft, setDraft] = useState<Filters>(initial);
 
-  // parent_id null marks a group; leaves hang off them (taxonomy seed, 0002).
-  const groups = (cuisines.data ?? []).filter((c) => c.parent_id === null);
-
-  const toggle = (slug: string) =>
-    setDraft((d) => ({
-      ...d,
-      cuisines: d.cuisines.includes(slug)
-        ? d.cuisines.filter((s) => s !== slug)
-        : [...d.cuisines, slug],
-    }));
+  const toggleIn = useCallback((list: string[], value: string) => {
+    return list.includes(value) ? list.filter((v) => v !== value) : [...list, value];
+  }, []);
 
   return (
-    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
-      <SafeAreaView style={styles.screen}>
-        <View style={styles.header}>
-          <Pressable onPress={onClose} hitSlop={12}>
-            <Text style={styles.headerAction}>Cancel</Text>
-          </Pressable>
-          <Text style={styles.headerTitle}>Filters</Text>
-          <Pressable onPress={() => setDraft(DEFAULT_FILTERS)} hitSlop={12}>
-            <Text style={styles.headerAction}>Reset</Text>
-          </Pressable>
-        </View>
+    <View style={s.screen}>
+      <View style={s.grip} />
+      <View style={s.head}>
+        <Text style={s.title}>Narrow it down</Text>
+        <Pressable onPress={onCancel} accessibilityRole="button" hitSlop={12}>
+          <Text style={s.quiet}>Cancel</Text>
+        </Pressable>
+      </View>
 
-        <ScrollView contentContainerStyle={styles.body}>
-          <Text style={styles.section}>How far?</Text>
-          <View style={styles.row}>
-            {RADII.map((mi) => (
-              <Pressable
-                key={mi}
-                onPress={() => setDraft((d) => ({ ...d, radiusMiles: mi }))}
-                style={[
-                  styles.pill,
-                  draft.radiusMiles === mi && styles.pillOn,
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.pillText,
-                    draft.radiusMiles === mi && styles.pillTextOn,
-                  ]}
-                >
-                  {mi} mi
-                </Text>
-              </Pressable>
-            ))}
-          </View>
-
-          <Text style={styles.section}>Open now?</Text>
-          <View style={styles.switchRow}>
-            <View style={styles.switchText}>
-              <Text style={styles.switchLabel}>Only places open now</Text>
-              <Text style={styles.switchHint}>
-                Hours come from Google. Places with no listing are kept —
-                they are not known to be closed.
-              </Text>
+      <ScrollView contentContainerStyle={s.body}>
+        {groups.length > 0 ? (
+          <View style={s.group}>
+            <Text style={s.lab}>What sort of thing</Text>
+            <View style={s.pills}>
+              {groups.map((g) => {
+                const on = draft.cuisines.includes(g.slug);
+                return (
+                  <Pressable
+                    key={g.slug}
+                    onPress={() => setDraft((d) => ({ ...d, cuisines: toggleIn(d.cuisines, g.slug) }))}
+                    accessibilityRole="checkbox"
+                    accessibilityState={{ checked: on }}
+                    style={({ pressed }) => [s.pill, on && s.pillOn, pressed && !on && s.pressed]}
+                  >
+                    <Text style={[s.pillLabel, on && s.pillLabelOn]}>{g.label}</Text>
+                    <Text style={[s.pillCount, on && s.pillCountOn]}>{g.place_count}</Text>
+                  </Pressable>
+                );
+              })}
             </View>
-            <Switch
-              value={draft.openNow}
-              onValueChange={(v) => setDraft((d) => ({ ...d, openNow: v }))}
-              trackColor={{ true: "#111", false: "#d6d6d6" }}
-            />
           </View>
+        ) : null}
 
-          <Text style={styles.section}>How good?</Text>
-          <Text style={styles.hint}>
-            Ratings come from Google and are fetched for the shortlist, so a
-            rating filter costs a little more than the others.
-          </Text>
-          <View style={styles.row}>
-            {RATINGS.map((r) => {
-              const on = draft.minRating === r.value;
-              return (
-                <Pressable
-                  key={r.label}
-                  onPress={() => setDraft((d) => ({ ...d, minRating: r.value }))}
-                  style={[styles.pill, on && styles.pillOn]}
-                >
-                  <Text style={[styles.pillText, on && styles.pillTextOn]}>
-                    {r.label}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
-
-          {draft.minRating !== null && (
-            // About one place in four has no Google listing at all, and those
-            // skew to rural independents -- the population this catalog exists
-            // to surface. Excluding them would quietly narrow the app to
-            // "restaurants Google knows well" exactly when someone is being
-            // selective, so the default keeps them.
-            <View style={styles.switchRow}>
-              <View style={styles.switchText}>
-                <Text style={styles.switchLabel}>Include unrated places</Text>
-                <Text style={styles.switchHint}>
-                  Some places have no Google listing. No rating isn&apos;t a bad
-                  rating.
-                </Text>
-              </View>
-              <Switch
-                value={draft.includeUnrated}
-                onValueChange={(v) =>
-                  setDraft((d) => ({ ...d, includeUnrated: v }))}
-                trackColor={{ true: "#111", false: "#d6d6d6" }}
-              />
+        {/*
+          Mood filters are built from tags the user has actually applied, so
+          the section simply does not exist until there is history. An empty
+          "Mood" heading with nothing under it would advertise a feature that
+          cannot work yet -- omitting beats filling, here as on the card.
+        */}
+        {moods.length > 0 ? (
+          <View style={s.group}>
+            <Text style={s.lab}>Somewhere that&apos;s…</Text>
+            <View style={s.pills}>
+              {moods.map((m) => {
+                const on = draft.moodTags.includes(m.key);
+                return (
+                  <Pressable
+                    key={m.key}
+                    onPress={() => setDraft((d) => ({ ...d, moodTags: toggleIn(d.moodTags, m.key) }))}
+                    accessibilityRole="checkbox"
+                    accessibilityState={{ checked: on }}
+                    style={({ pressed }) => [s.pill, s.pillBrass, on && s.pillBrassOn, pressed && !on && s.pressed]}
+                  >
+                    <Text style={[s.pillLabel, on && s.pillLabelBrassOn]}>{m.label}</Text>
+                  </Pressable>
+                );
+              })}
             </View>
-          )}
+          </View>
+        ) : null}
 
-          <Text style={styles.section}>What kind?</Text>
-          <Text style={styles.hint}>
-            Nothing selected means everything.
-          </Text>
-          {cuisines.isPending
-            ? <ActivityIndicator style={styles.loading} />
-            : (
-              <View style={styles.wrap}>
-                {groups.map((g) => {
-                  const on = draft.cuisines.includes(g.slug);
-                  return (
-                    <Pressable
-                      key={g.slug}
-                      onPress={() => toggle(g.slug)}
-                      style={[styles.pill, on && styles.pillOn]}
-                    >
-                      <Text style={[styles.pillText, on && styles.pillTextOn]}>
-                        {g.label}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
-            )}
-        </ScrollView>
-
-        <View style={styles.footer}>
+        <View style={s.switchRow}>
+          <View style={s.switchText}>
+            <Text style={s.switchLabel}>Open right now</Text>
+            {/* §6: label anything that costs a lookup as costing one. */}
+            <Text style={s.switchHint}>Checks Google. Uses part of tonight&apos;s allowance.</Text>
+          </View>
           <Pressable
-            style={styles.apply}
-            onPress={() => {
-              onApply(draft);
-              onClose();
-            }}
+            onPress={() => setDraft((d) => ({ ...d, openNow: !d.openNow }))}
+            accessibilityRole="switch"
+            accessibilityState={{ checked: draft.openNow }}
+            style={[s.toggle, draft.openNow && s.toggleOn]}
           >
-            <Text style={styles.applyText}>
-              {[
-                draft.cuisines.length === 0
-                  ? "Show everything"
-                  : `Show ${draft.cuisines.length} selected`,
-                draft.minRating ? `${draft.minRating}+ stars` : null,
-                draft.openNow ? "open now" : null,
-                `within ${draft.radiusMiles} mi`,
-              ].filter(Boolean).join(" · ")}
-            </Text>
+            <View style={[s.knob, draft.openNow && s.knobOn]} />
           </Pressable>
         </View>
-      </SafeAreaView>
-    </Modal>
+      </ScrollView>
+
+      <View style={[s.actbar, { paddingBottom: insets.bottom + theme.space.lg }]}>
+        <Pressable
+          onPress={() => onCommit(draft)}
+          accessibilityRole="button"
+          style={({ pressed }) => [s.btn, pressed && s.pressed]}
+        >
+          <Text style={s.btnLabel}>Show me</Text>
+        </Pressable>
+      </View>
+    </View>
   );
 }
 
-const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: "#fff" },
-  header: {
-    flexDirection: "row", alignItems: "center",
-    justifyContent: "space-between", paddingHorizontal: 20, paddingVertical: 14,
-    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: "#ddd",
-  },
-  headerTitle: { fontSize: 17, fontWeight: "600" },
-  headerAction: { fontSize: 16, color: "#2a6fd6" },
-  body: { padding: 20, gap: 10, paddingBottom: 40 },
-  section: { fontSize: 20, fontWeight: "700", marginTop: 14 },
-  hint: { fontSize: 13, color: "#8a8a8a", marginBottom: 4 },
-  row: { flexDirection: "row", gap: 8 },
-  wrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  loading: { marginTop: 16 },
-  switchRow: {
-    flexDirection: "row", alignItems: "center", gap: 14, marginTop: 6,
-    paddingVertical: 10,
-  },
-  switchText: { flexShrink: 1, gap: 2 },
-  switchLabel: { fontSize: 16, color: "#111" },
-  switchHint: { fontSize: 13, color: "#8a8a8a", lineHeight: 18 },
-  pill: {
-    paddingVertical: 10, paddingHorizontal: 14, borderRadius: 20,
-    backgroundColor: "#f0f0f0",
-  },
-  pillOn: { backgroundColor: "#111" },
-  pillText: { fontSize: 15, color: "#333" },
-  pillTextOn: { color: "#fff", fontWeight: "600" },
-  footer: {
-    padding: 20, borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: "#ddd",
-  },
-  apply: {
-    backgroundColor: "#111", paddingVertical: 15, borderRadius: 12,
-    alignItems: "center",
-  },
-  applyText: { color: "#fff", fontSize: 16, fontWeight: "600" },
-});
+const sheets = new Map<ThemeName, ReturnType<typeof build>>();
+function styles(theme: Theme): ReturnType<typeof build> {
+  let sheet = sheets.get(theme.name);
+  if (!sheet) { sheet = build(theme); sheets.set(theme.name, sheet); }
+  return sheet;
+}
+
+const build = ({ colours: c, space, radius, hairline }: Theme) =>
+  StyleSheet.create({
+    screen: { flex: 1, backgroundColor: c.surface },
+    grip: {
+      width: 34, height: 4, borderRadius: radius.pill,
+      backgroundColor: c.ruleStrong, alignSelf: "center", marginTop: 9,
+    },
+    head: {
+      flexDirection: "row", justifyContent: "space-between", alignItems: "center",
+      paddingHorizontal: 18, paddingTop: space.lg, paddingBottom: space.md,
+    },
+    title: { ...type.sheetHead, color: c.ink },
+    quiet: { ...type.meta, color: c.inkMuted },
+    body: { paddingHorizontal: 18, paddingBottom: space.xl },
+    group: { marginBottom: space.xl },
+    lab: { ...type.label, color: c.inkFaint, marginBottom: 9 },
+    pills: { flexDirection: "row", flexWrap: "wrap", gap: 7 },
+    pill: {
+      flexDirection: "row", alignItems: "center", columnGap: 5,
+      borderWidth: hairline, borderColor: c.ruleStrong, borderRadius: radius.pill,
+      paddingVertical: 7, paddingHorizontal: space.md,
+    },
+    pillOn: { backgroundColor: c.ink, borderColor: c.ink },
+    pillBrass: { borderColor: c.brass },
+    pillBrassOn: { backgroundColor: c.brass, borderColor: c.brass },
+    pillLabel: { ...type.meta, color: c.ink },
+    pillLabelOn: { color: c.ground },
+    pillLabelBrassOn: { color: c.brassInk },
+    pillCount: { ...type.tileMeta, color: c.inkFaint },
+    pillCountOn: { color: c.ground, opacity: 0.82 },
+    switchRow: {
+      flexDirection: "row", justifyContent: "space-between", alignItems: "center",
+      columnGap: space.lg, paddingVertical: 13,
+      borderTopWidth: hairline, borderTopColor: c.rule,
+    },
+    switchText: { flexShrink: 1, rowGap: 2 },
+    switchLabel: { ...type.body, color: c.ink },
+    switchHint: { ...type.tileMeta, color: c.inkMuted },
+    toggle: {
+      width: 42, height: 25, borderRadius: radius.pill, borderWidth: hairline,
+      borderColor: c.ruleStrong, backgroundColor: c.surface2, justifyContent: "center",
+    },
+    toggleOn: { backgroundColor: c.brass, borderColor: c.brass },
+    knob: {
+      width: 17, height: 17, borderRadius: 9, backgroundColor: c.inkFaint, marginLeft: 3,
+    },
+    knobOn: { backgroundColor: c.brassInk, marginLeft: 22 },
+    actbar: {
+      borderTopWidth: hairline, borderTopColor: c.rule,
+      paddingHorizontal: 18, paddingTop: space.lg,
+    },
+    btn: {
+      backgroundColor: c.brass, borderRadius: radius.button,
+      paddingVertical: 15, alignItems: "center",
+    },
+    btnLabel: { ...type.button, color: c.brassInk },
+    pressed: { opacity: 0.6 },
+  });

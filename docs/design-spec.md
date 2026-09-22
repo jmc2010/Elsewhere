@@ -217,6 +217,27 @@ shown** — same dimensions, wording flipped. One screen, one thumb, ~4 seconds.
 | Fits a group | Felt dirty |
 | Fair price | Nothing for me on the menu |
 
+### `It was fine` takes no tags
+
+Tapping *It was fine* closes the sheet. One tap, done.
+
+Neither list is right there. The positive list asks someone to praise a place
+they were lukewarm about. The negative list is worse: showing a column of
+complaints to somebody who said "fine" is a leading question, and it reframes
+a neutral evening as a bad one on the way to recording it.
+
+*It was fine* is already a complete answer. It means no complaints and no
+pull, and that is exactly the signal the engine needs — eligible, no boost,
+normal recency.
+
+One small optional affordance follows it — **"Anything worth noting?"** —
+which reveals **both** lists when tapped, for the "fine, but too loud" case
+where somebody does have a specific thing to say.
+
+This also makes the effort proportional to the information. The two verdicts
+that carry real signal earn a tag step; the one that does not costs a single
+tap.
+
 ### Tag propagation classes — important
 
 Each tag carries a class that decides how far it travels:
@@ -357,9 +378,21 @@ ghost-kitchen clusters. Run it in the ingest.
 
 - Only two filters need Google: **star floor** (removed) and **open now**.
 - `open now` can never be cached, even briefly — it changes by the minute.
-- **Rerolls are free**: hydrate the pool of ten once, draw the reveal from it.
-  The cap of three is therefore about commitment, not budget, and the copy can
-  say so honestly.
+- **Hydrate ONLY the displayed shortlist — the ≤10 after ranking.** Never the
+  candidate pool.
+
+  "The pool" meant ten when this was written and now means two hundred, and
+  the two readings have very different bills. The candidate pool exists so
+  ranking has something to choose from; it is Layer 1, free, and it is never
+  sent to Google. Hydrating 200 rows per shortlist would exhaust a day's quota
+  in an afternoon.
+
+  The chain is: **200 candidates → rank → 10 displayed → hydrate those 10 →
+  the reveal draws its 4 from the same 10.**
+
+- **Rerolls are free**: the reveal draws from places the shortlist has already
+  hydrated, so a reroll issues no call at all. The cap of three is therefore
+  about commitment, not budget, and the copy can say so honestly.
 - `phone` is ours and free. **"Call to check if they're open" costs nothing;
   "show the opening hours" costs money.** Lean on the former.
 

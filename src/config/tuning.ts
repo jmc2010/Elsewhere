@@ -64,6 +64,26 @@ export const tuning = {
   },
 
   /**
+   * Where the "where from" control changes shape (§6).
+   *
+   * Below this many places within reach, the control is a nearest-first town
+   * list; at or above it, miles. Rurally distance is a cliff rather than a
+   * dial -- five miles is a handful and ten is a whole other town -- so
+   * asking "how far?" asks a question the user cannot answer.
+   *
+   * Tune against: which control people actually use at each density.
+   */
+  location: {
+    /**
+     * 200, not 60. Gainesville has 166 places and a user there still thinks
+     * in towns -- Gainesville, Denton, Sherman -- not in miles. A threshold
+     * of 60 put a genuinely rural county seat into the urban shape and asked
+     * it a question it could not answer.
+     */
+    denseThreshold: 200,
+  },
+
+  /**
    * Rural exhausted (§10).
    *
    * When every nearby place already has a verdict, the screen offers one way
@@ -108,6 +128,21 @@ export const tuning = {
      */
     /** Verdict `Again` -- longer, because a place you loved is the easiest rut to fall into. Tune against: re-lock-in rate. */
     againCooldownDays: 45,
+    /**
+     * A lock-in that review capture has not resolved yet.
+     *
+     * PROVISIONAL, and deliberately short. A lock-in is a choice, not a
+     * visit -- people commit and then don't go. Suppressing for as long as a
+     * real visit would punish a plan that fell through, and the review prompt
+     * should have resolved it within a day or two anyway.
+     *
+     * What it must achieve: not offering tonight's restaurant tomorrow
+     * morning. That is the whole job.
+     *
+     * Tune against: how often an unresolved lock-in is followed by a lock-in
+     * somewhere else the next day.
+     */
+    unresolvedLockinDays: 3,
   },
 
   /**

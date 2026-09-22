@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Linking, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import Animated, {
   Easing,
   useAnimatedStyle,
@@ -54,6 +54,8 @@ export interface RevealCandidate {
   rating?: number | null;
   priceLevel?: string | null;
   phone?: string | null;
+  lat?: number | null;
+  lon?: number | null;
   /** The one line of voice. Omitted when there is no honest one. */
   why?: string | null;
 }
@@ -62,6 +64,35 @@ export interface SurpriseRevealProps {
   candidates: RevealCandidate[];
   onClose: () => void;
   onCommit: (candidate: RevealCandidate) => void;
+}
+
+/**
+ * Open the platform's own maps app, falling back to the web.
+ *
+ * Not a feature -- a URL scheme per platform. iOS and Android disagree on the
+ * shape, and both can fail (no maps app installed, scheme blocked), so the
+ * https fallback is not optional: a "Directions" button that does nothing is
+ * worse than one that opens a browser.
+ *
+ * The Android form carries the name in parentheses so the pin is labelled
+ * rather than being an anonymous dot at a coordinate.
+ */
+async function openDirections(lat: number, lon: number, name: string): Promise<void> {
+  const web = `https://maps.google.com/?q=${lat},${lon}`;
+  const native =
+    Platform.OS === "ios"
+      ? `maps://?daddr=${lat},${lon}`
+      : `geo:${lat},${lon}?q=${lat},${lon}(${encodeURIComponent(name)})`;
+  try {
+    if (await Linking.canOpenURL(native)) {
+      await Linking.openURL(native);
+      return;
+    }
+  } catch {
+    // Fall through. canOpenURL can throw on a scheme the OS will not even
+    // answer questions about, which is not a reason to give up on the button.
+  }
+  await Linking.openURL(web).catch(() => {});
 }
 
 /** §7: the cap is about commitment, not budget. Rerolls cost nothing. */
@@ -211,6 +242,27 @@ export function SurpriseReveal({ candidates, onClose, onCommit }: SurpriseReveal
       <View style={[s.acts, { paddingBottom: insets.bottom + theme.space.lg }]}>
         {committed ? (
           <>
+            <View style={s.row}>
+              {pick.lat != null && pick.lon != null ? (
+                <Drawn
+                  label="Directions"
+                  onPress={() => void openDirections(pick.lat!, pick.lon!, pick.name)}
+                  tone="quiet"
+                  grow
+                />
+              ) : null}
+              {/* Phone is Layer 1 -- ours, free. Calling to check they are
+                  open costs nothing; asking Google for the hours costs money
+                  (§7), so this button is the cheap half of that question. */}
+              {pick.phone ? (
+                <Drawn
+                  label="Call"
+                  onPress={() => void Linking.openURL(`tel:${pick.phone!.replace(/[^\d+]/g, "")}`)}
+                  tone="quiet"
+                  grow
+                />
+              ) : null}
+            </View>
             <Text style={s.signoff}>Go eat.</Text>
             <Text style={s.after}>I&apos;ll ask how it went tomorrow.</Text>
           </>
@@ -259,10 +311,12 @@ function Drawn({
   label,
   onPress,
   tone,
+  grow,
 }: {
   label: string;
   onPress: () => void;
   tone: "primary" | "quiet";
+  grow?: boolean;
 }) {
   const theme = useTheme();
   const s = styles(theme);
@@ -273,6 +327,7 @@ function Drawn({
       style={({ pressed }) => [
         s.btn,
         tone === "primary" ? s.btnPrimary : s.btnQuiet,
+        grow && s.btnGrow,
         pressed && s.btnPressed,
       ]}
     >
@@ -307,6 +362,8 @@ const build = ({ colours: c, space, radius, hairline }: Theme) =>
     btnPrimary: { backgroundColor: c.brass },
     btnQuiet: { borderWidth: hairline, borderColor: c.ruleStrong },
     btnPressed: { opacity: 0.7 },
+    btnGrow: { flexGrow: 1, flexBasis: 0 },
+    row: { flexDirection: "row", columnGap: space.sm },
     btnLabel: { ...type.button },
     btnLabelPrimary: { color: c.brassInk },
     btnLabelQuiet: { color: c.inkMuted },

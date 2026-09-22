@@ -14,12 +14,15 @@
 
 import { useQuery } from "@tanstack/react-query";
 import * as Location from "expo-location";
-import { Redirect } from "expo-router";
+import { Redirect, router } from "expo-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { PlaceCard, type Action, type PlaceCardProps, type Reason, type Tick } from "@/components/PlaceCard";
+import { DEFAULT_FILTERS, FilterSheet, type CuisineGroup, type Filters, type MoodTag } from "@/components/FilterSheet";
+import { LocationPicker, type Origin, type Town } from "@/components/LocationPicker";
+import { ReviewCapture, type ReviewResult, type Tag } from "@/components/ReviewCapture";
 import { SurpriseReveal, type RevealCandidate } from "@/components/SurpriseReveal";
 import { tuning } from "@/config/tuning";
 import { hasSeenColdStart } from "@/lib/coldStart";
@@ -51,8 +54,34 @@ interface CatalogPlace {
   last_visited_at: string | null;
   visit_count: number;
   my_verdict: "again" | "fine" | "known" | "not_again" | null;
+  /** The caller's most recent lock-in here, if any. */
+  last_locked_at: string | null;
   /** 4 this cycle, 3 earlier 2026, 2 during 2025, 1 pre-2025, 0 unknown. */
   freshness: number;
+  /** How many people have recorded any verdict here. Existence, not opinion. */
+  confirmations: number;
+}
+
+interface RawLockin {
+  id: string;
+  place_id: string;
+  locked_at: string;
+  // PostgREST returns an embedded relation as an array even when the foreign
+  // key guarantees at most one row. Typing it honestly is cheaper than
+  // casting through `unknown` and hoping.
+  places: { display_name: string }[] | null;
+}
+
+interface RawVerdictTag {
+  tag_key: string;
+  tags: { label: string }[] | null;
+  place_verdicts: { place_id: string }[] | null;
+}
+
+interface PendingReview {
+  id: string;
+  place_id: string;
+  display_name: string;
 }
 
 /** Mirrors catalog_localities()'s RETURNS TABLE. */
@@ -124,14 +153,18 @@ function Shortlist() {
   const [needsColdStart, setNeedsColdStart] = useState<boolean | null>(null);
   // Where the search is centred. `me` is the device; `town` is the escape
   // hatch the exhausted screen offers, and the one thing that screen can do.
-  const [origin, setOrigin] = useState<
-    { kind: "me" } | { kind: "town"; name: string; lat: number; lon: number }
-  >({ kind: "me" });
+  const [origin, setOrigin] = useState<Origin>({ kind: "me" });
+  const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
+  const [sheet, setSheet] = useState<"none" | "where" | "what">("none");
   // Explicitly number: `tuning` is `as const`, so inference would pin this to
   // the literal 5 and refuse the widened value.
   const [radiusMiles, setRadiusMiles] = useState<number>(tuning.catalog.radiusMiles);
 
   const [revealOpen, setRevealOpen] = useState(false);
+  // Dismissed for this run only. "Later" must not mean "never" -- the prompt
+  // is the only way a verdict ever gets recorded.
+  const [reviewDismissed, setReviewDismissed] = useState(false);
+  const [reviewBusy, setReviewBusy] = useState(false);
 
   const [sessionId] = useState(
     () => `app-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -171,7 +204,7 @@ function Shortlist() {
   const centre = origin.kind === "town" ? { lat: origin.lat, lon: origin.lon } : coords;
 
   const catalog = useQuery({
-    queryKey: ["catalog_search", centre?.lat, centre?.lon, radiusMiles, userId],
+    queryKey: ["catalog_search", centre?.lat, centre?.lon, radiusMiles, userId, filters.cuisines],
     enabled: centre !== null && userId !== null,
     queryFn: async (): Promise<CatalogPlace[]> => {
       const { data, error } = await supabase.rpc("catalog_search", {
@@ -181,6 +214,10 @@ function Shortlist() {
         p_limit: tuning.catalog.poolLimit,
         p_seed: catalogSeed(userId!),
         p_include_non_destinations: tuning.catalog.includeNonDestinations,
+        // Empty means no cuisine filter. An empty array would make
+        // catalog_search raise -- a slug list matching nothing is a caller bug
+        // there, not a request for everything.
+        p_cuisines: filters.cuisines.length > 0 ? filters.cuisines : null,
       });
       if (error) throw error;
       return (data ?? []) as CatalogPlace[];
@@ -204,9 +241,55 @@ function Shortlist() {
     },
   });
 
-  // `not_again` and non-destinations are both removed server-side now, so the
-  // pool is what came back.
-  const pool = useMemo(() => catalog.data ?? [], [catalog.data]);
+  // Mood filters are the tags the USER has applied -- theirs, and free. The
+  // section does not exist until there is history, which is why this returns
+  // an empty list rather than the whole vocabulary.
+  const myTags = useQuery({
+    queryKey: ["my-tags", userId],
+    enabled: userId !== null,
+    queryFn: async (): Promise<{ moods: MoodTag[]; byPlace: Map<string, Set<string>> }> => {
+      const { data, error } = await supabase
+        .from("verdict_tags")
+        .select("tag_key, tags(label), place_verdicts(place_id)");
+      if (error) throw error;
+      const rows = (data ?? []) as RawVerdictTag[];
+      const counts = new Map<string, MoodTag>();
+      const byPlace = new Map<string, Set<string>>();
+      for (const r of rows) {
+        const label = r.tags?.[0]?.label ?? r.tag_key;
+        const existing = counts.get(r.tag_key);
+        counts.set(r.tag_key, { key: r.tag_key, label, used: (existing?.used ?? 0) + 1 });
+        const pid = r.place_verdicts?.[0]?.place_id;
+        if (pid) {
+          if (!byPlace.has(pid)) byPlace.set(pid, new Set());
+          byPlace.get(pid)!.add(r.tag_key);
+        }
+      }
+      return {
+        moods: [...counts.values()].sort((a, b) => b.used - a.used),
+        byPlace,
+      };
+    },
+  });
+
+  // `not_again` and non-destinations are both removed server-side now. What
+  // remains to filter is the provisional suppression: somewhere locked in
+  // within the last few days and not yet resolved by review capture. Without
+  // this the app offers tonight's restaurant again tomorrow morning, which is
+  // the rut it exists to break.
+  const pool = useMemo(() => {
+    const cutoff = Date.now() - tuning.recency.unresolvedLockinDays * 24 * 60 * 60 * 1000;
+    const tagged = myTags.data?.byPlace;
+    return (catalog.data ?? []).filter((p) => {
+      if (p.last_locked_at && Date.parse(p.last_locked_at) >= cutoff) return false;
+      if (filters.moodTags.length === 0) return true;
+      // A mood filter is "somewhere I have called this before". It can only
+      // match places with history, which is honest: it is your data, not an
+      // inference about places you have never been.
+      const mine = tagged?.get(p.place_id);
+      return mine ? filters.moodTags.some((t) => mine.has(t)) : false;
+    });
+  }, [catalog.data, filters.moodTags, myTags.data]);
 
   // Rural-exhausted is a real, ordinary Tuesday in a 21-place town, not an
   // edge case -- and after six taps in the recognition grid it is reachable
@@ -223,6 +306,15 @@ function Shortlist() {
     [pool, unknownToYou],
   );
 
+  // ONLY the displayed shortlist is hydrated -- never `pool`, which is 200
+  // rows of Layer 1 that exist so ranking has something to choose from. Spec
+  // §7 says "hydrate the pool once", and that wording predates the pool being
+  // 200: hydrating it per shortlist would spend a day's quota in an
+  // afternoon. The chain is 200 candidates -> rank -> 10 displayed -> hydrate
+  // those 10 -> the reveal draws its 4 from the same 10.
+  const activeFilterCount =
+    filters.cuisines.length + filters.moodTags.length + (filters.openNow ? 1 : 0);
+
   const ids = shortlist.map((p) => p.place_id);
 
   // Hydration is cached PER PLACE, not per query. Keying on the whole id list
@@ -230,6 +322,118 @@ function Shortlist() {
   // 62 seconds, about 70% of the daily quota.
   const [liveById, setLiveById] = useState<Map<string, HydratedPlace>>(() => new Map());
   const missing = ids.filter((id) => !liveById.has(id));
+
+  if (__DEV__ && missing.length > SHORTLIST) {
+    // A guard rather than a comment, because the failure is silent and
+    // expensive: nothing breaks, the quota just empties.
+    throw new Error(
+      `Hydration asked for ${missing.length} places; the cap is ${SHORTLIST}. ` +
+        "Something is hydrating the candidate pool instead of the shortlist.",
+    );
+  }
+
+  const cuisineGroups = useQuery({
+    queryKey: ["cuisine-counts", centre?.lat, centre?.lon, radiusMiles],
+    enabled: centre !== null,
+    staleTime: 10 * 60 * 1000,
+    queryFn: async (): Promise<CuisineGroup[]> => {
+      const { data, error } = await supabase.rpc("catalog_cuisine_counts", {
+        p_lat: centre!.lat,
+        p_lon: centre!.lon,
+        p_radius_meters: radiusMiles * MILES,
+        p_include_non_destinations: tuning.catalog.includeNonDestinations,
+      });
+      if (error) throw error;
+      return (data ?? []) as CuisineGroup[];
+    },
+  });
+
+  // The oldest unresolved lock-in, with the place's name. A few hours' delay
+  // so somebody is not asked how dinner was while they are still eating it.
+  const pendingReview = useQuery({
+    queryKey: ["pending-review", userId],
+    enabled: userId !== null,
+    queryFn: async (): Promise<PendingReview | null> => {
+      const { data, error } = await supabase
+        .from("place_lockins")
+        .select("id, place_id, locked_at, places(display_name)")
+        .is("resolved_at", null)
+        .lt("locked_at", new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString())
+        .order("locked_at", { ascending: true })
+        .limit(1);
+      if (error) throw error;
+      const row = data?.[0] as RawLockin | undefined;
+      if (!row) return null;
+      return {
+        id: row.id,
+        place_id: row.place_id,
+        display_name: row.places?.[0]?.display_name ?? "that place",
+      };
+    },
+  });
+
+  // Fixed vocabulary, 20 rows, effectively immutable.
+  const tagList = useQuery({
+    queryKey: ["tags"],
+    enabled: userId !== null,
+    staleTime: Infinity,
+    queryFn: async (): Promise<Tag[]> => {
+      const { data, error } = await supabase
+        .from("tags")
+        .select("key,label,valence")
+        .order("sort_order");
+      if (error) throw error;
+      return (data ?? []) as Tag[];
+    },
+  });
+
+  const resolveLockin = useCallback(
+    async (lockinId: string, didGo: boolean, result: ReviewResult | null, placeId?: string) => {
+      setReviewBusy(true);
+      try {
+        if (didGo && result && placeId && userId) {
+          // One current verdict per user per place -- changing your mind
+          // replaces it rather than appending a second.
+          const { data: verdict, error } = await supabase
+            .from("place_verdicts")
+            .upsert(
+              {
+                user_id: userId,
+                place_id: placeId,
+                verdict: result.verdict,
+                note: result.note,
+                visited_on: new Date().toISOString().slice(0, 10),
+              },
+              { onConflict: "user_id,place_id" },
+            )
+            .select("id")
+            .single();
+          if (error) throw error;
+
+          // Tags are replaced wholesale: a re-review should move the tags, not
+          // accumulate the old ones alongside the new.
+          await supabase.from("verdict_tags").delete().eq("verdict_id", verdict.id);
+          if (result.tagKeys.length > 0) {
+            await supabase.from("verdict_tags").insert(
+              result.tagKeys.map((tag_key) => ({ verdict_id: verdict.id, tag_key })),
+            );
+          }
+        }
+        await supabase
+          .from("place_lockins")
+          .update({ resolved_at: new Date().toISOString(), did_go: didGo })
+          .eq("id", lockinId);
+      } catch (e) {
+        console.warn("review not saved:", e instanceof Error ? e.message : String(e));
+      } finally {
+        setReviewBusy(false);
+        setReviewDismissed(true);
+        void pendingReview.refetch();
+        void catalog.refetch();
+      }
+    },
+    [userId, pendingReview, catalog],
+  );
 
   const hydration = useQuery({
     // join() rather than the array: a fresh array with identical contents is a
@@ -276,14 +480,32 @@ function Shortlist() {
       rating: live?.rating ?? null,
       priceLevel: live?.priceLevel ? (PRICE[live.priceLevel] ?? null) : null,
       phone: p.phone,
-      // No honest reason exists yet for most places, and the reveal omits the
-      // line rather than filling it.
-      why: null,
+      lat: p.lat,
+      lon: p.lon,
+      why: whyFor(p),
     };
   });
 
   if (sessionError) {
     return <Notice head="Couldn't connect" body={sessionError} />;
+  }
+
+  // Review capture is an interstitial, never a destination (§13). It appears
+  // on the next cold open after a lock-in and takes precedence over the
+  // shortlist: answering it is what makes the shortlist better, and a prompt
+  // behind a list is a prompt nobody answers.
+  const pending = pendingReview.data;
+  if (!reviewDismissed && pending && tagList.data) {
+    return (
+      <ReviewCapture
+        subject={{ placeId: pending.place_id, name: pending.display_name, lockinId: pending.id }}
+        tags={tagList.data}
+        busy={reviewBusy}
+        onDismiss={() => setReviewDismissed(true)}
+        onDidNotGo={() => void resolveLockin(pending.id, false, null)}
+        onSubmit={(r) => void resolveLockin(pending.id, true, r, pending.place_id)}
+      />
+    );
   }
   if (needsColdStart === null && userId !== null) {
     return <Spinner />;
@@ -314,16 +536,59 @@ function Shortlist() {
     return <Notice head="Search failed" body={(catalog.error as Error).message} />;
   }
 
+  if (sheet === "where") {
+    return (
+      <LocationPicker
+        towns={(towns.data ?? []) as Town[]}
+        origin={origin}
+        radiusMiles={radiusMiles}
+        localCount={pool.length}
+        onCancel={() => setSheet("none")}
+        onPick={(next, miles) => {
+          setOrigin(next);
+          setRadiusMiles(miles);
+          setSheet("none");
+        }}
+      />
+    );
+  }
+
+  if (sheet === "what") {
+    return (
+      <FilterSheet
+        groups={cuisineGroups.data ?? []}
+        moods={myTags.data?.moods ?? []}
+        initial={filters}
+        onCancel={() => setSheet("none")}
+        // Committed ONCE, here, on dismissal. Nothing behind the sheet
+        // reflows while it is open (§6).
+        onCommit={(next) => {
+          setFilters(next);
+          setSheet("none");
+        }}
+      />
+    );
+  }
+
   if (revealOpen && revealCandidates.length > 0) {
     return (
       <SurpriseReveal
         candidates={revealCandidates}
         onClose={() => setRevealOpen(false)}
-        onCommit={() => {
-          // Commit is currently terminal on this screen: the visit record and
-          // the review prompt it should create are review capture's job (§4),
-          // which does not exist yet. Recording a visit here with nothing able
-          // to read it would look like progress and be none.
+        onCommit={(c) => {
+          // A lock-in, not a visit and not a verdict. It drives provisional
+          // recency suppression and gives review capture its trigger; review
+          // capture then resolves it into a verdict or into "didn't go".
+          void supabase
+            .from("place_lockins")
+            .insert({ user_id: userId, place_id: c.placeId })
+            .then(({ error }) => {
+              // Deliberately not surfaced. The user has decided where they are
+              // going and is about to put the phone down; an error toast at
+              // that moment interrupts the one thing the app exists to finish.
+              // The cost of a lost lock-in is one redundant suggestion.
+              if (error) console.warn("lock-in not recorded:", error.message);
+            });
         }}
       />
     );
@@ -338,7 +603,43 @@ function Shortlist() {
           paddingHorizontal: 18,
         }}
       >
-        <Text style={s.eyebrow}>Tonight</Text>
+        <View style={s.topRow}>
+          <Text style={s.eyebrow}>Tonight</Text>
+          {/* §13: header right, ONE affordance, opening the shelf. */}
+          <Pressable
+            onPress={() => router.push("/shelf")}
+            accessibilityRole="button"
+            hitSlop={12}
+          >
+            <Text style={s.shelfLink}>Yours</Text>
+          </Pressable>
+        </View>
+        <View style={s.chips}>
+          <Pressable
+            onPress={() => setSheet("where")}
+            accessibilityRole="button"
+            style={({ pressed }) => [s.chip, pressed && s.chipPressed]}
+          >
+            <Text style={s.chipLabel}>
+              {origin.kind === "town" ? origin.name : "Where I am"}
+            </Text>
+            <Text style={s.chipCount}>{radiusMiles} mi</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => setSheet("what")}
+            accessibilityRole="button"
+            style={({ pressed }) => [
+              s.chip, activeFilterCount > 0 && s.chipOn, pressed && s.chipPressed,
+            ]}
+          >
+            <Text style={[s.chipLabel, activeFilterCount > 0 && s.chipLabelOn]}>
+              {activeFilterCount > 0 ? `${activeFilterCount} filters` : "Anything"}
+            </Text>
+            <Text style={[s.chipCount, activeFilterCount > 0 && s.chipCountOn]}>
+              {pool.length}
+            </Text>
+          </Pressable>
+        </View>
         {exhausted ? (
           <Exhausted
             count={pool.length}
@@ -364,7 +665,13 @@ function Shortlist() {
 
             <View style={s.list}>
               {shortlist.map((p, i) => (
-                <PlaceCard key={p.place_id} {...toCard(p, liveById.get(p.place_id))} isFirst={i === 0} />
+                <PlaceCard
+                  key={p.place_id}
+                  {...toCard(p, liveById.get(p.place_id))}
+                  isFirst={i === 0}
+                  // §13: card tap pushes detail. The whole row is the target.
+                  onPress={() => router.push(`/place/${p.place_id}`)}
+                />
               ))}
             </View>
 
@@ -449,6 +756,25 @@ function toCard(p: CatalogPlace, hydrated: HydratedPlace | undefined): PlaceCard
     reason,
     action,
   };
+}
+
+/**
+ * The one line of voice on the reveal.
+ *
+ * Two honest sources exist today and neither needs a verdict -- both are §5
+ * confidence states, read straight off the catalog:
+ *
+ *   nobody has confirmed it      -> "Nobody's said a word about this one."
+ *   untouched upstream pre-2025  -> "This one may have changed hands."
+ *
+ * When neither applies the line is NULL and the reveal omits it. Omitting
+ * still beats filling: a why-line that says something true of every place is
+ * not voice, it is decoration that teaches people to stop reading it.
+ */
+function whyFor(p: CatalogPlace): string | null {
+  if (p.freshness === 1) return "This one may have changed hands.";
+  if (p.confirmations === 0) return "Nobody's said a word about this one.";
+  return null;
 }
 
 /** Slug -> label, for the one cuisine the card shows. */
@@ -612,6 +938,20 @@ const build = ({ colours: c, space, radius, hairline }: Theme) =>
     head: { ...type.screenHead, color: c.ink, marginBottom: space.xs },
     sub: { ...type.body, color: c.inkMuted },
     list: { marginTop: space.lg },
+    topRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "baseline" },
+    shelfLink: { ...type.label, color: c.inkMuted },
+    chips: { flexDirection: "row", flexWrap: "wrap", gap: space.sm, marginTop: space.md },
+    chip: {
+      flexDirection: "row", alignItems: "center", columnGap: 6,
+      borderWidth: hairline, borderColor: c.rule, backgroundColor: c.surface,
+      borderRadius: radius.pill, paddingVertical: 7, paddingHorizontal: 13,
+    },
+    chipOn: { backgroundColor: c.ink, borderColor: c.ink },
+    chipPressed: { opacity: 0.6 },
+    chipLabel: { ...type.meta, color: c.ink },
+    chipLabelOn: { color: c.ground },
+    chipCount: { ...type.tileMeta, color: c.inkFaint },
+    chipCountOn: { color: c.ground, opacity: 0.82 },
     attrib: {
       ...type.tileMeta, color: c.inkFaint,
       textAlign: "center", marginTop: space.lg,

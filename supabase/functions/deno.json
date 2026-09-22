@@ -1,0 +1,22 @@
+{
+  "//": [
+    "Config for the edge functions, and it exists to solve one specific",
+    "problem: the repo root holds the Expo app's package.json, and Deno takes",
+    "the presence of a package.json to mean npm dependencies are resolved from",
+    "node_modules. The edge-function CI job never runs npm install -- it has no",
+    "reason to, it is checking Deno code -- so node_modules is absent and the",
+    "check fails on a transitive npm dependency of supabase-js.",
+    "",
+    "nodeModulesDir 'none' tells Deno to resolve npm packages from its own",
+    "global cache instead. The edge functions have no node_modules of their",
+    "own and should not grow one: they are deployed by the Supabase CLI, which",
+    "bundles from source.",
+    "",
+    "Reproduced before fixing: supabase/ + deno.lock alone passes; adding the",
+    "root package.json with no node_modules reproduces the CI failure exactly."
+  ],
+  "nodeModulesDir": "none",
+  "imports": {
+    "@supabase/supabase-js": "jsr:@supabase/supabase-js@2"
+  }
+}

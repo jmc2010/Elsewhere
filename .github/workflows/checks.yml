@@ -37,7 +37,12 @@ jobs:
         with:
           deno-version: v2.x
       - name: Typecheck
-        run: deno check supabase/functions/**/*.ts
+        # --config explicitly: Deno discovers config from the working
+        # directory, and there is deliberately no deno.json at the repo root
+        # (that would be the Expo app's territory). Without this the root
+        # package.json wins and the check looks for a node_modules this job
+        # has no reason to install.
+        run: deno check --config supabase/functions/deno.json supabase/functions/**/*.ts
 
   app:
     name: App typecheck

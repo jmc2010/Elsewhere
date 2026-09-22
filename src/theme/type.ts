@@ -178,6 +178,12 @@ export const type = {
     fontSize: 11,
     lineHeight: 15.4,
   },
+  /** Sheet heading. Fraunces 19 / 1.25. From the canvas. */
+  sheetHead: {
+    fontFamily: family.tile,
+    fontSize: 19,
+    lineHeight: 23.75,
+  },
   /** Primary action. Archivo 15.5 / 1.1, 700. From the canvas. */
   button: {
     fontFamily: family.bold,

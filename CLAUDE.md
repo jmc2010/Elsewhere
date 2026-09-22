@@ -121,6 +121,10 @@ keeps it short. Be terse. No code diffs, no narrative of the work.
   This is where drift enters, so err toward listing it. "None" if none.
 **Numbers:** real counts, distributions, before/after samples. Raw values,
   not characterisations — "2,076 rows (5.3%)", never "a small number".
+**Awaiting ruling:** decisions needed from the reader, WITH THE DATA INLINE.
+  Paste the actual strings, rows and counts here. Never "see above" and never
+  "pasted earlier" — this block is what gets forwarded, so anything outside
+  it does not exist. "None" if none.
 **Blocked:** what is waiting, and on what
 **Skipped:** deliberately not done, and why
 ```
@@ -132,6 +136,10 @@ Two rules about it:
   than no block at all.
 - **Do not soften numbers.** If the name-cleaning rule mangles 40 of the 489
   long names, say 40 and show three of them.
+- **"Awaiting ruling" carries its own evidence.** A question that references
+  data sitting in the surrounding prose is a question that never gets asked,
+  because the block travels and the prose does not. If a ruling needs forty
+  rows, forty rows go in the block.
 
 ## Conventions
 

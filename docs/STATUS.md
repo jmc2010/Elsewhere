@@ -275,6 +275,34 @@ but reason lines are Layer 3 and there is almost nothing there yet. If a card
 has no honest reason, omit the line. Never substitute distance or a rating as
 filler.
 
+### The name-cleaning rule is FROZEN. This is a decision, not an omission.
+
+`derive_display_name` is finished. Do not extend it.
+
+Where it got to: 97 rows changed on the last substantive pass, then 1 on the
+one after. The marginal return on further regex is now below the risk that the
+next refinement breaks something already working — which has happened twice
+already. The one-sided dash allowance fixed "Chicken- Irving TX" and broke
+"Estrada's TEX- MEX"; the both-sides fix repaired that and silently reverted
+every correct colon cut.
+
+The accepted residue, recorded so nobody re-opens it as a bug:
+
+- `SPICY AROMA- Indian cuisine` stays uncleaned. Ugly and readable beats
+  mangled: `Estrada's TEX` was wrong, and the card handles long names with
+  two lines and an ellipsis already.
+- `Howard Wang's To Go -trinity Grove, West Dallas` likewise.
+- `Restaurant Designs Inc` stays visible, because hiding it would have hidden
+  three real bakeries.
+
+**Residue goes to user correction, not to more regex.** Spec §5's "It's called
+something else now" is the mechanism, it repairs the row permanently, and it
+is the highest-value contribution a user can make. A rule that gets a name 95%
+right and a correction path for the rest beats a rule chasing 99%.
+
+If a refinement is proposed in future, the answer is no unless it comes with
+a measured before/after over the whole catalog AND names the rows it breaks.
+
 ### Known gaps, carried forward deliberately
 
 - **`catalog_search` returns none of the new catalog fields.** Item 1 above.
@@ -301,6 +329,14 @@ filler.
   words do not land in a restaurant's name by accident. Apply the same test
   to any pattern proposed later; measured hit rate is corroboration, never
   the argument.
+
+  **And the test needs evidence, not intuition.** `commissary` was ruled
+  semantically unambiguous and kept on that basis; the catalog then produced
+  *The Commissary | Tea House* and *Commissary | Cafe*, and `distribution`
+  produced *Distribution Bar | Cocktail Bar*. Both were dropped in 0046. The
+  test was right and was applied badly: before keeping a pattern, query the
+  catalog for rows that match it AND carry a cuisine. If any do, the word is
+  ambiguous in practice whatever it sounds like in the abstract.
 - **Ranking moves into `catalog_search`** with §15 thresholds held in a
   tuning table, when Dallas pool sizes get uncomfortable. Recorded, not
   scheduled. The interim is ordering the pool by `update_time desc, id`,
