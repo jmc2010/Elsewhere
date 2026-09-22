@@ -60,7 +60,7 @@ export function CorrectionSheet({ placeName, busy, onSubmit, onCancel }: Correct
     (kind === "renamed" && newName.trim().length > 1);
 
   return (
-    <View style={s.screen}>
+    <View style={[s.screen, { paddingTop: insets.top }]}>
       <View style={s.grip} />
       <View style={s.head}>
         <Text style={s.title}>What&apos;s changed?</Text>

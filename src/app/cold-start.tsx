@@ -73,9 +73,17 @@ function ColdStartBody() {
         return { denied: true as const };
       }
 
-      const position = await Location.getCurrentPositionAsync({
+      // Cached fix first, fresh one only if there isn't one. Same reasoning
+      // as the shortlist: at a 5-mile gate a few hundred metres of drift is
+      // invisible, and a cold GPS lock on the very first screen somebody ever
+      // sees is seconds spent buying nothing. A thrown fix here would have
+      // shown "That didn't work" to a user whose location is perfectly fine.
+      const cached = await Location.getLastKnownPositionAsync({
+        maxAge: 10 * 60 * 1000,
+      }).catch(() => null);
+      const position = cached ?? (await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.Balanced,
-      });
+      }));
       const userId = await ensureSession();
 
       const [places, cuisines] = await Promise.all([
@@ -204,6 +212,7 @@ function ColdStartBody() {
           <RecognitionGrid places={pool.data.places} selected={selected} onToggle={toggle} />
         </View>
       </ScrollView>
+      <View style={[s.statusScrim, { height: insets.top }]} pointerEvents="none" />
 
       <View style={[s.actbar, { paddingBottom: insets.bottom + theme.space.lg }]}>
         <Drawn
@@ -270,6 +279,7 @@ function styles(theme: Theme): ReturnType<typeof build> {
 const build = ({ colours: c, space, radius, hairline }: Theme) =>
   StyleSheet.create({
     screen: { flex: 1, backgroundColor: c.ground },
+    statusScrim: { position: "absolute", top: 0, left: 0, right: 0, backgroundColor: c.ground },
     centre: {
       flex: 1, backgroundColor: c.ground, alignItems: "center",
       justifyContent: "center", padding: space.xxl, rowGap: space.md,

@@ -124,6 +124,18 @@ const PRICE: Record<string, string> = {
 
 type Permission = "unknown" | "explaining" | "granted" | "denied";
 
+/**
+ * Why locating fails, when it fails.
+ *
+ * `denied` and `no_fix` are different problems with different fixes, and
+ * conflating them was a real bug: a cold GPS on first open threw, the catch
+ * set "denied", and the screen told somebody who had already granted location
+ * to go and grant location. It then "fixed itself" on the next open once the
+ * GPS had warmed up, which is the worst kind of bug -- intermittent, and
+ * blamed on the phone.
+ */
+type LocateFailure = "no_fix" | null;
+
 export default function Home() {
   const [fontsLoaded, fontError] = useAppFonts();
   if (fontError) {
@@ -148,6 +160,7 @@ function Shortlist() {
 
   const [permission, setPermission] = useState<Permission>("unknown");
   const [coords, setCoords] = useState<{ lat: number; lon: number } | null>(null);
+  const [locateFailure, setLocateFailure] = useState<LocateFailure>(null);
   const [userId, setUserId] = useState<string | null>(null);
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [needsColdStart, setNeedsColdStart] = useState<boolean | null>(null);
@@ -189,12 +202,43 @@ function Shortlist() {
     });
   }, []);
 
+  const locate = useCallback(async () => {
+    setLocateFailure(null);
+
+    // Try the cached fix FIRST. It returns immediately, it is accurate to
+    // within a few hundred metres, and at a 5-mile gate that is indis-
+    // tinguishable from a fresh one. Waiting for a satellite lock to decide
+    // which town you are in is precision nobody asked for, paid in the one
+    // currency this app cannot spend: the seconds before the first screen.
+    try {
+      const last = await Location.getLastKnownPositionAsync({ maxAge: 10 * 60 * 1000 });
+      if (last) {
+        setCoords({ lat: last.coords.latitude, lon: last.coords.longitude });
+      }
+    } catch {
+      // No cached fix. Not a failure -- the fresh attempt below is the real one.
+    }
+
+    try {
+      const fresh = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+      });
+      setCoords({ lat: fresh.coords.latitude, lon: fresh.coords.longitude });
+    } catch {
+      // A failed FIX is not a denied PERMISSION. Only report a problem if
+      // there is no cached position to fall back on either; otherwise the
+      // user has a usable location and does not need to hear about it.
+      setCoords((prev) => {
+        if (!prev) setLocateFailure("no_fix");
+        return prev;
+      });
+    }
+  }, []);
+
   useEffect(() => {
     if (permission !== "granted") return;
-    Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced })
-      .then((p) => setCoords({ lat: p.coords.latitude, lon: p.coords.longitude }))
-      .catch(() => setPermission("denied"));
-  }, [permission]);
+    void locate();
+  }, [permission, locate]);
 
   const requestLocation = useCallback(async () => {
     const { status } = await Location.requestForegroundPermissionsAsync();
@@ -531,6 +575,18 @@ function Shortlist() {
       />
     );
   }
+  // Permission granted, no position. Different problem, different words --
+  // telling somebody to enable a setting they already enabled is how an app
+  // teaches people not to read its messages.
+  if (locateFailure === "no_fix" && !coords) {
+    return (
+      <Notice
+        head="Can't get a fix."
+        body="Location's on, but your phone hasn't found itself yet. That's usually indoors or a cold start."
+        action={{ label: "Try again", onPress: () => void locate() }}
+      />
+    );
+  }
   if (catalog.isPending || !coords) return <Spinner />;
   if (catalog.isError) {
     return <Notice head="Search failed" body={(catalog.error as Error).message} />;
@@ -596,10 +652,21 @@ function Shortlist() {
 
   return (
     <View style={s.screen}>
+      {/*
+        Android runs edge-to-edge, so the ScrollView really does extend under
+        the status bar -- and with nothing painted there, the list scrolls
+        visibly behind the clock and the battery icon. Padding the content by
+        insets.top moves the content down but paints nothing, which is why the
+        first card still passed under the icons.
+        This is the missing half: an opaque strip in the ground colour, drawn
+        AFTER the ScrollView so it sits above it.
+      */}
       <ScrollView
         contentContainerStyle={{
           paddingTop: insets.top + theme.space.lg,
-          paddingBottom: theme.space.xxxl,
+          // Clears the floating action, so the last card is never trapped
+          // underneath it.
+          paddingBottom: insets.bottom + 76,
           paddingHorizontal: 18,
         }}
       >
@@ -668,7 +735,10 @@ function Shortlist() {
                 <PlaceCard
                   key={p.place_id}
                   {...toCard(p, liveById.get(p.place_id), () =>
-                    router.push(`/place/${p.place_id}`),
+                    // Via detail, not straight to the sheet: the address is
+                    // what tells the user WHICH record they are reporting.
+                    // See design spec §13.
+                    router.push(`/place/${p.place_id}?correct=1`),
                   )}
                   isFirst={i === 0}
                   // §13: card tap pushes detail. The whole row is the target.
@@ -685,14 +755,38 @@ function Shortlist() {
         )}
       </ScrollView>
 
+      {/*
+        Android runs edge-to-edge, so the ScrollView really does extend under
+        the status bar -- and with nothing painted there, the list scrolls
+        visibly behind the clock and the battery icon. Padding the content by
+        insets.top moves content down but paints nothing, which is why the
+        first card still passed under the icons.
+        Drawn after the ScrollView so it sits above it.
+      */}
+      <View style={[s.statusScrim, { height: insets.top }]} pointerEvents="none" />
+
       {!exhausted && shortlist.length > 0 ? (
-        <View style={[s.actbar, { paddingBottom: insets.bottom + theme.space.lg }]}>
+        /*
+          A floating pill rather than a full-width bar.
+          The bar was about 100pt of a phone screen given to one button, on the
+          screen whose whole job is showing a list. Floating it hands that back
+          to the cards while keeping the action exactly where the thumb is.
+          It is still the only primary action on the screen, and still pinned
+          (§13) -- what changed is how much room it takes to say so.
+          Brass on the ground has enough contrast to read over a scrolling
+          card without a scrim; the shadow is platform-split because iOS and
+          Android disagree about how to draw one.
+        */
+        <View
+          style={[s.floatWrap, { bottom: insets.bottom + theme.space.md }]}
+          pointerEvents="box-none"
+        >
           <Pressable
             onPress={() => setRevealOpen(true)}
             accessibilityRole="button"
-            style={({ pressed }) => [s.btn, s.btnWide, pressed && s.btnPressed]}
+            style={({ pressed }) => [s.float, pressed && s.btnPressed]}
           >
-            <Text style={s.btnLabel}>You pick.</Text>
+            <Text style={s.floatLabel}>You pick.</Text>
           </Pressable>
         </View>
       ) : null}
@@ -969,13 +1063,35 @@ const build = ({ colours: c, space, radius, hairline }: Theme) =>
       backgroundColor: c.brass, paddingVertical: 15, paddingHorizontal: space.xxl,
     },
     btnPressed: { opacity: 0.7 },
-    btnWide: { paddingHorizontal: 0, marginTop: 0 },
+    btnWide: { paddingHorizontal: 0, marginTop: 0, paddingVertical: 13 },
+    floatWrap: { position: "absolute", left: 0, right: 0, alignItems: "center" },
+    float: {
+      backgroundColor: c.brass,
+      borderRadius: radius.pill,
+      paddingVertical: 13,
+      paddingHorizontal: 30,
+      // Platform-split on purpose: shadowColor is ignored on Android and
+      // elevation is ignored on iOS.
+      shadowColor: c.ground,
+      shadowOpacity: 0.35,
+      shadowRadius: 12,
+      shadowOffset: { width: 0, height: 4 },
+      elevation: 6,
+    },
+    floatLabel: { ...type.button, color: c.brassInk },
+    statusScrim: {
+      position: "absolute", top: 0, left: 0, right: 0,
+      backgroundColor: c.ground,
+    },
+    // Slimmed. It was paddingTop 16 + button 15/15 + bottom inset + 16, about
+    // 100pt of a phone screen given over to one button on the screen whose
+    // entire job is showing you a list. The rule is gone too: against the
+    // ground colour it drew a line under the content for no reason, since the
+    // bar already separates itself by sitting still while the list moves.
     actbar: {
       backgroundColor: c.ground,
-      borderTopWidth: hairline,
-      borderTopColor: c.rule,
       paddingHorizontal: 18,
-      paddingTop: space.lg,
+      paddingTop: space.md,
     },
     btnLabel: { ...type.button, color: c.brassInk, textAlign: "center" },
   });

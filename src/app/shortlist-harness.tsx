@@ -85,8 +85,8 @@ function BlockBody({ themeName, exhausted }: { themeName: ThemeName; exhausted: 
             not a failure — it&apos;s a small town, and you&apos;ve done the
             rounds.
           </Text>
-          <View style={s.btn}>
-            <Text style={s.btnLabel}>Open it up to Sanger · 55</Text>
+          <View style={s.exhaustedBtn}>
+            <Text style={s.floatLabel}>Open it up to Sanger · 55</Text>
           </View>
         </View>
       ) : (
@@ -99,6 +99,9 @@ function BlockBody({ themeName, exhausted }: { themeName: ThemeName; exhausted: 
             ))}
           </View>
           <Text style={s.attrib}>Ratings and hours from Google · Powered by Google</Text>
+          <View style={s.floatWrap}>
+            <View style={s.float}><Text style={s.floatLabel}>You pick.</Text></View>
+          </View>
         </>
       )}
     </View>
@@ -147,12 +150,15 @@ const build = ({ colours: c, space }: Theme) =>
     sub: { ...type.body, color: c.inkMuted },
     list: { marginTop: space.lg },
     attrib: { ...type.tileMeta, color: c.inkFaint, textAlign: "center", marginTop: space.lg },
+    floatWrap: { alignItems: "center", marginTop: space.lg },
+    float: { backgroundColor: c.brass, borderRadius: 999, paddingVertical: 13, paddingHorizontal: 30 },
+    floatLabel: { ...type.button, color: c.brassInk },
     exhausted: { paddingTop: space.xxl, rowGap: space.sm },
-    btn: {
+    exhaustedBtn: {
       marginTop: space.sm, borderRadius: 12, backgroundColor: c.brass,
       paddingVertical: 15, paddingHorizontal: space.xxl, alignSelf: "flex-start",
     },
-    btnLabel: { ...type.button, color: c.brassInk, textAlign: "center" },
+
     mark: { width: 30, height: 2, backgroundColor: c.brass, marginBottom: space.xs },
   });
 

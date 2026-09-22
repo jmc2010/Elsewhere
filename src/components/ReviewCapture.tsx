@@ -1,6 +1,8 @@
 import { useCallback, useMemo, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+
 import { useTheme, type Theme, type ThemeName } from "@/theme/tokens";
 import { type } from "@/theme/type";
 
@@ -87,6 +89,7 @@ export function ReviewCapture({
 }: ReviewCaptureProps) {
   const theme = useTheme();
   const s = styles(theme);
+  const insets = useSafeAreaInsets();
 
   const [verdict, setVerdict] = useState<VerdictKind | null>(null);
   const [picked, setPicked] = useState<ReadonlySet<string>>(() => new Set());
@@ -135,7 +138,7 @@ export function ReviewCapture({
   }, []);
 
   return (
-    <View style={s.screen}>
+    <View style={[s.screen, { paddingTop: insets.top }]}>
       <ScrollView contentContainerStyle={s.body}>
         <Text style={s.eyebrow}>Last night</Text>
         <Text style={s.head}>How was {subject.name}?</Text>

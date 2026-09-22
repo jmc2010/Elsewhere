@@ -381,15 +381,33 @@ Deno.serve(async (req: Request) => {
   );
   const requested = willCall.length + needsResolution.length;
 
-  const sku = action === "detail"
+  // Attribute per call, by what is actually invoked. A batch is not one kind
+  // of call: a place needing resolution costs a searchText AND a details
+  // call, and searchText is Text Search -- a different SKU family from Place
+  // Details entirely, not merely a different tier of it.
+  //
+  // The MASK selects the tier, which is why these names are what they are:
+  //   MASK_RESOLVE asks for displayName and location, both Pro-tier fields
+  //     for Text Search (id/name/attributions alone would be Essentials).
+  //   MASK_SHORTLIST adds rating, priceLevel and hours -> Enterprise.
+  //   MASK_DETAIL adds reviews and the serves*/goodFor* attributes
+  //     -> Enterprise + Atmosphere.
+  const detailSku = action === "detail"
     ? "places.details.enterprise_atmosphere"
     : "places.details.enterprise";
+
+  const breakdown: Record<string, number> = {};
+  if (needsResolution.length > 0) {
+    breakdown["places.searchText.pro"] = needsResolution.length;
+  }
+  if (willCall.length > 0) {
+    breakdown[detailSku] = willCall.length;
+  }
 
   const { data: quotaRow, error: quotaErr } = await db
     .rpc("google_quota_reserve", {
       p_user: user.id,
-      p_sku: sku,
-      p_calls: requested,
+      p_breakdown: breakdown,
       p_session: sessionId,
     })
     .single();

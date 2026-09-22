@@ -101,12 +101,17 @@ export default function PlaceDetailRoute() {
 }
 
 function PlaceDetail() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  // `correct=1` means the user arrived by tapping "Still there?" on a card.
+  // They came here to report something, so the correction entry is surfaced
+  // rather than left to be hunted for at the bottom of the screen.
+  const { id, correct: correctParam } =
+    useLocalSearchParams<{ id: string; correct?: string }>();
   const theme = useTheme();
   const s = styles(theme);
   const insets = useSafeAreaInsets();
   const qc = useQueryClient();
   const [correcting, setCorrecting] = useState(false);
+  const arrivedToCorrect = correctParam === "1";
 
   const detail = useQuery({
     queryKey: ["place_detail", id],
@@ -259,9 +264,15 @@ function PlaceDetail() {
         <Pressable
           onPress={() => setCorrecting(true)}
           accessibilityRole="button"
-          style={({ pressed }) => [s.correct, pressed && s.pressed]}
+          style={({ pressed }) => [
+            s.correct,
+            arrivedToCorrect && s.correctPrimary,
+            pressed && s.pressed,
+          ]}
         >
-          <Text style={s.correctLabel}>Still there?</Text>
+          <Text style={[s.correctLabel, arrivedToCorrect && s.correctLabelPrimary]}>
+            Still there?
+          </Text>
           <Text style={s.quiet}>Tell me if it&apos;s gone, renamed, or not somewhere you eat.</Text>
         </Pressable>
         {correct.isError ? (
@@ -312,6 +323,9 @@ function PlaceDetail() {
           </View>
         ) : null}
       </ScrollView>
+      {/* Same edge-to-edge strip as the shortlist: padding moves content, it
+          does not paint, so without this the name scrolls under the clock. */}
+      <View style={[s.statusScrim, { height: insets.top }]} pointerEvents="none" />
     </View>
   );
 }
@@ -355,6 +369,7 @@ function styles(theme: Theme): ReturnType<typeof build> {
 const build = ({ colours: c, space, radius, hairline }: Theme) =>
   StyleSheet.create({
     screen: { flex: 1, backgroundColor: c.ground },
+    statusScrim: { position: "absolute", top: 0, left: 0, right: 0, backgroundColor: c.ground },
     centre: { flex: 1, backgroundColor: c.ground, alignItems: "center", justifyContent: "center", padding: space.xxl, rowGap: space.sm },
     head: { ...type.screenHead, color: c.ink },
     back: { ...type.meta, color: c.inkMuted, marginBottom: space.lg },
@@ -378,6 +393,8 @@ const build = ({ colours: c, space, radius, hairline }: Theme) =>
     rowLabel: { ...type.meta, color: c.inkMuted },
     rowValue: { ...type.meta, color: c.ink, flexShrink: 1, textAlign: "right" },
 
+    correctPrimary: { borderColor: c.brass, backgroundColor: c.surface },
+    correctLabelPrimary: { color: c.brass },
     correct: { marginTop: space.xxl, borderWidth: hairline, borderColor: c.ruleStrong, borderRadius: radius.button, padding: space.lg, rowGap: 3 },
     correctLabel: { ...type.button, color: c.ink },
 

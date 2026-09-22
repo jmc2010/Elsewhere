@@ -556,7 +556,20 @@ One stack, rooted at the shortlist. Four presentation kinds:
 - Lens chip (header, beside it) → **Filter** sheet
 - `You pick.` (pinned, primary) → **Reveal** modal
 - Card tap → **Place detail** push
-- `Still there?` on a stale card, or an action on detail → **Correction** sheet
+- `Still there?` on a stale card → **Place detail**, with the correction entry
+  surfaced on arrival. NOT straight to the correction sheet.
+
+  This changed after the sheet was built, and the reasoning matters because
+  the shortcut looks obviously better. The failure mode of a correction is not
+  a slow one, it is a WRONG one. The card shows a cleaned `display_name`, and
+  from that alone a user cannot tell which record they are reporting —
+  `Simply South - Indian Vegetarian Restaurant` appears three times in the
+  catalog, and twenty rows clean to `HTeaO`. The address on detail is what
+  disambiguates them.
+
+  A false closure report poisons the catalog for everyone, nobody is
+  positioned to catch it, and two of them suppress a real restaurant.
+  Corrections are rare; optimise them for accuracy, not for taps.
 - Header right, one affordance → **The shelf** sheet: Your usuals, Your people,
   the veto list, settings
 

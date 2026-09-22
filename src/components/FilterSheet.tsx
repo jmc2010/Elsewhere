@@ -79,7 +79,7 @@ export function FilterSheet({ groups, moods, initial, onCommit, onCancel }: Filt
   }, []);
 
   return (
-    <View style={s.screen}>
+    <View style={[s.screen, { paddingTop: insets.top }]}>
       <View style={s.grip} />
       <View style={s.head}>
         <Text style={s.title}>Narrow it down</Text>

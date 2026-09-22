@@ -99,7 +99,7 @@ function Shelf() {
   });
 
   return (
-    <View style={s.screen}>
+    <View style={[s.screen, { paddingTop: insets.top }]}>
       <View style={s.grip} />
       <View style={s.head}>
         <Text style={s.title}>Yours</Text>
