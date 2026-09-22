@@ -57,6 +57,9 @@ interface GoogleReview {
   authorAttribution?: { displayName?: string; uri?: string; photoUri?: string };
 }
 
+/** What places-proxy reports back per place. */
+type LiveStatus = "ok" | "unresolved" | "quota_exceeded" | "error";
+
 interface GoogleLive {
   rating?: number;
   userRatingCount?: number;
@@ -135,7 +138,7 @@ function PlaceDetail() {
     staleTime: Infinity,
     gcTime: Infinity,
     retry: false,
-    queryFn: async (): Promise<GoogleLive | null> => {
+    queryFn: async (): Promise<{ live: GoogleLive | null; status: LiveStatus }> => {
       const { data, error } = await supabase.functions.invoke("places-proxy", {
         // session_id makes the call attributable in google_api_usage, which
         // is how "one open, how many calls?" gets answered with a query
@@ -143,8 +146,11 @@ function PlaceDetail() {
         body: { action: "detail", place_ids: [id], session_id: detailSessionId },
       });
       if (error) throw error;
-      const first = (data as { places?: { live: GoogleLive | null }[] })?.places?.[0];
-      return first?.live ?? null;
+      const payload = data as {
+        places?: { live: GoogleLive | null; live_status?: LiveStatus }[];
+      };
+      const first = payload?.places?.[0];
+      return { live: first?.live ?? null, status: first?.live_status ?? "error" };
     },
   });
 
@@ -191,7 +197,11 @@ function PlaceDetail() {
   }
 
   const d = detail.data;
-  const g = live.data;
+  const g = live.data?.live ?? null;
+  // Quota exhaustion is an EXPECTED state with designed copy (§10), not an
+  // unexpected error. Conflating them would show somebody a stack trace for
+  // the one failure the product planned for.
+  const quotaSpent = live.data?.status === "quota_exceeded";
   const meta = [d.cuisines[0], d.locality_suspect ? null : d.locality].filter(Boolean) as string[];
 
   return (
@@ -281,6 +291,35 @@ function PlaceDetail() {
 
         {live.isPending ? (
           <View style={s.google}><ActivityIndicator color={theme.colours.inkFaint} /></View>
+        ) : quotaSpent ? (
+          <View style={s.google}>
+            <View style={s.googleHead}>
+              <Text style={s.googleLabel}>From Google</Text>
+            </View>
+            <Text style={s.quotaHead}>I&apos;m out of Google&apos;s ratings for tonight.</Text>
+            <Text style={s.fact}>
+              Names, distances, your own notes and your friends&apos; all still
+              work — which is most of what you came for.
+            </Text>
+          </View>
+        ) : live.isError ? (
+          /*
+            Say so. This block previously rendered NOTHING on error, and that
+            silence cost a whole round of cost testing: a broken edge function
+            looked identical to a cache hit, so "zero Google calls" read as a
+            triumph instead of a failure. A Layer 2 failure is not fatal --
+            the card above is complete without it -- but it must be visible.
+          */
+          <View style={s.google}>
+            <View style={s.googleHead}>
+              <Text style={s.googleLabel}>From Google</Text>
+            </View>
+            <Text style={s.fact}>
+              Couldn&apos;t reach Google just now. Everything above is ours and
+              still true.
+            </Text>
+            <Text style={s.reviewer}>{(live.error as Error).message}</Text>
+          </View>
         ) : g ? (
           <View style={s.google}>
             <View style={s.googleHead}>
@@ -409,6 +448,7 @@ const build = ({ colours: c, space, radius, hairline }: Theme) =>
     avatar: { width: 28, height: 28, borderRadius: 14, backgroundColor: c.surface2 },
     reviewBody: { flexShrink: 1, rowGap: 3 },
     reviewer: { ...type.tileMeta, color: c.ink },
+    quotaHead: { ...type.voice, color: c.ink, marginBottom: space.sm },
     reviewText: { ...type.meta, color: c.inkMuted },
     pressed: { opacity: 0.6 },
   });

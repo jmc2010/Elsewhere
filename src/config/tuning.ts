@@ -75,6 +75,19 @@ export const tuning = {
    */
   location: {
     /**
+     * How far the device must move before the search re-centres.
+     *
+     * Not a precision setting -- a STABILITY one. The search centre is part
+     * of the catalog_search cache key, so a centre that drifts by ten metres
+     * between a cached fix and a fresh one produces a different pool, a
+     * different shortlist and a fresh round of paid hydration. Measured: one
+     * back-navigation cost 7 Google calls that way.
+     *
+     * 250m is far below the 5-mile gate, so nothing a user would notice
+     * changes; it is only large enough to absorb GPS jitter.
+     */
+    recentreMeters: 250,
+    /**
      * 200, not 60. Gainesville has 166 places and a user there still thinks
      * in towns -- Gainesville, Denton, Sherman -- not in miles. A threshold
      * of 60 put a genuinely rural county seat into the urban shape and asked

@@ -335,7 +335,40 @@ Detail calls carry a `detail-` session id, so the real number is a query:
 select sum(call_count) from google_api_usage where session_id like 'detail-%';
 ```
 
+### The measured cost model, end to end
+
+Measured on device 2026-09-22, in a single uninterrupted session with the
+per-call SKU attribution in place:
+
+| Action | Google calls |
+|---|---|
+| Cold open — shortlist, 5 cards needing live data | **5** |
+| `You pick.` -> reroll -> back | **0** |
+| Open a place detail | **1** Atmosphere (2 if the place is unresolved) |
+| Re-open the same place | **0** |
+| Realistic session: open + two details + reveal + commit | **~7** |
+
+At the 60/day default that is roughly **8 full sessions** before a user is
+degraded, and degradation is graceful: names, distances, their own notes and
+their friends' all keep working.
+
+**A cold open costs 5 calls and that is correct**, not a leak. New process,
+empty per-place hydration cache, five cards that need live data. A run of
+force-restarts therefore looks exactly like a runaway loop in the usage log —
+three restarts five seconds apart produced 15 calls and were initially
+misread as a reshuffling bug. **When reading google_api_usage, count distinct
+`app-` session ids first**: a new session id means a new process, not a new
+fault.
+
 ### Known gaps, carried forward deliberately
+
+- **A raw error message can still reach a user.** Place detail renders the
+  Layer 2 error string verbatim when the failure is unexpected. That is
+  deliberate as a dev diagnostic — a friendly "something went wrong" cost an
+  entire round of cost testing by hiding a broken edge function — but it must
+  not ship to a real user. **Pre-launch item.** The one failure that already
+  has designed copy, quota exhaustion, is handled separately and correctly
+  (§10: "I'm out of Google's ratings for tonight.").
 
 - **`catalog_search` returns none of the new catalog fields.** Item 1 above.
 - **Five Nekter rows keep their store number** in `display_name`

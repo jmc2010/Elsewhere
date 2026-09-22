@@ -170,6 +170,42 @@ Order the shortlist entirely from local, free data:
 A shortlist must render completely with **zero Google calls**. Ratings, price and
 open-now are a layer that lands on top, not a foundation.
 
+### The shortlist is stable until something real changes it
+
+The ten are chosen once and held. They are re-chosen when something genuinely
+changes the inputs — a new verdict, a lock-in, a filter change, a location
+change — and at no other time. Not on navigation, not on focus, not when a
+fresher GPS fix arrives, not on a refetch.
+
+**This is a product rule, not an optimisation.** §2 is commitment over
+optionality. A list that rearranges itself while you glance away invites
+re-browsing, and re-browsing is the paralysis this product exists to remove.
+If the fourth card was worth considering when you looked at it, it is still
+worth considering when you look back.
+
+Two mechanisms make it hold:
+
+- **Every comparator ends in a tiebreak that cannot tie** — the row's index in
+  the returned pool. Equal scores must never be free to reorder between
+  renders.
+- **The selection is pinned by id** and reused, rather than recomputed.
+
+**Correcting the record**: this rule was written in response to what looked
+like a 7-call back-navigation. It was not one. Measured properly afterwards,
+those calls were three force-restarts of the app — each a legitimate cold open
+with an empty hydration cache — and navigation was already free. The rule is
+still right on its own terms, and the total order and the pinned selection
+were specified deliberately, but nothing here fixed a regression, because
+there was no regression.
+
+What navigation actually costs, measured in a single uninterrupted session:
+reveal, reroll and back cost **0**; opening a place detail costs **1** (two if
+it still needs resolving); re-opening it costs **0**.
+
+If a place leaves the pool — vetoed, corrected away, suppressed — it is
+dropped from the list and **not backfilled**. Silently swapping in a
+replacement is the same reshuffle wearing a helpful face.
+
 ### What is news depends on density
 
 - **Urban**: news is a place you have never been.

@@ -160,6 +160,29 @@ function Shortlist() {
 
   const [permission, setPermission] = useState<Permission>("unknown");
   const [coords, setCoords] = useState<{ lat: number; lon: number } | null>(null);
+
+  /**
+   * Adopt a fix only if it MOVES us.
+   *
+   * The search centre is part of the catalog_search cache key. Setting it
+   * twice -- once from the cached fix, once from the fresh one -- changes the
+   * key by a few metres, which refetches the pool, reshuffles the shortlist
+   * and re-hydrates cards at Google's expense. That is what cost 7 calls on a
+   * back-navigation.
+   *
+   * So the first usable fix anchors the session, and a later one replaces it
+   * only if the device has genuinely moved. At a 5-mile gate, 250m is
+   * invisible.
+   */
+  const adoptFix = useCallback((lat: number, lon: number) => {
+    setCoords((prev) => {
+      if (!prev) return { lat, lon };
+      const dLat = (lat - prev.lat) * 111_320;
+      const dLon = (lon - prev.lon) * 111_320 * Math.cos((prev.lat * Math.PI) / 180);
+      const moved = Math.sqrt(dLat * dLat + dLon * dLon);
+      return moved > tuning.location.recentreMeters ? { lat, lon } : prev;
+    });
+  }, []);
   const [locateFailure, setLocateFailure] = useState<LocateFailure>(null);
   const [userId, setUserId] = useState<string | null>(null);
   const [sessionError, setSessionError] = useState<string | null>(null);
@@ -213,7 +236,7 @@ function Shortlist() {
     try {
       const last = await Location.getLastKnownPositionAsync({ maxAge: 10 * 60 * 1000 });
       if (last) {
-        setCoords({ lat: last.coords.latitude, lon: last.coords.longitude });
+        adoptFix(last.coords.latitude, last.coords.longitude);
       }
     } catch {
       // No cached fix. Not a failure -- the fresh attempt below is the real one.
@@ -223,7 +246,7 @@ function Shortlist() {
       const fresh = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.Balanced,
       });
-      setCoords({ lat: fresh.coords.latitude, lon: fresh.coords.longitude });
+      adoptFix(fresh.coords.latitude, fresh.coords.longitude);
     } catch {
       // A failed FIX is not a denied PERMISSION. Only report a problem if
       // there is no cached position to fall back on either; otherwise the
@@ -233,7 +256,7 @@ function Shortlist() {
         return prev;
       });
     }
-  }, []);
+  }, [adoptFix]);
 
   useEffect(() => {
     if (permission !== "granted") return;
@@ -341,14 +364,66 @@ function Shortlist() {
   const unknownToYou = useMemo(() => pool.filter((p) => p.my_verdict === null), [pool]);
   const exhausted = pool.length > 0 && unknownToYou.length === 0;
 
-  // Novelty first, then everything else. This is NOT the ranking from §3 --
-  // that needs tag affinity, friend verdicts and confidence weights that do
-  // not exist yet. It is the smallest ordering that is honestly better than
-  // arbitrary, and distance is deliberately absent from it.
-  const shortlist = useMemo(
-    () => [...unknownToYou, ...pool.filter((p) => p.my_verdict !== null)].slice(0, SHORTLIST),
-    [pool, unknownToYou],
-  );
+  /**
+   * The ten, selected ONCE and held for the session.
+   *
+   * Two rules, and the second is a product rule rather than an optimisation.
+   *
+   * TOTAL ORDER. Every comparator ends in the row's index within the pool,
+   * which can never tie -- so two runs over the same pool always produce the
+   * same ten in the same order. A sort that leaves equal scores to reorder
+   * between renders silently reshuffles the shortlist, and each reshuffle
+   * buys hydration for cards the user never asked to see.
+   *
+   * STABLE UNTIL SOMETHING REAL CHANGES IT. §2 is commitment over
+   * optionality: a list that rearranges itself while you glance away invites
+   * re-browsing, which is the paralysis this product exists to remove. So the
+   * selection is pinned by id and reused, and it is invalidated deliberately
+   * -- a new verdict, a new lock-in, a filter or location change -- never
+   * incidentally by navigating back to the screen.
+   *
+   * This is NOT §3's ranking, which needs tag affinity, friend verdicts and
+   * confidence weights that do not exist yet. It is the smallest ordering
+   * that is honestly better than arbitrary, and distance is deliberately
+   * absent from it.
+   */
+  const ranked = useMemo(() => {
+    const index = new Map(pool.map((p, i) => [p.place_id, i]));
+    const score = (p: CatalogPlace) => (p.my_verdict === null ? 0 : 1);
+    return [...pool]
+      .sort((a, b) =>
+        score(a) - score(b) ||
+        // The tiebreak that can never tie. Pool order is itself deterministic
+        // -- catalog_search seeds it per user per day -- so this makes the
+        // whole chain reproducible.
+        (index.get(a.place_id)! - index.get(b.place_id)!))
+      .slice(0, SHORTLIST);
+  }, [pool]);
+
+  // Pinned by id. Null means "not chosen yet this session".
+  const [pinnedIds, setPinnedIds] = useState<string[] | null>(null);
+
+  // Deliberate invalidation only. Note what is NOT here: navigation, focus,
+  // a refetch, or the arrival of a fresher GPS fix.
+  useEffect(() => {
+    setPinnedIds(null);
+  }, [filters, origin, radiusMiles]);
+
+  useEffect(() => {
+    if (pinnedIds === null && ranked.length > 0) {
+      setPinnedIds(ranked.map((p) => p.place_id));
+    }
+  }, [pinnedIds, ranked]);
+
+  const shortlist = useMemo(() => {
+    if (!pinnedIds) return ranked;
+    const byId = new Map(pool.map((p) => [p.place_id, p]));
+    // Drop anything that has left the pool -- vetoed, corrected away, or now
+    // suppressed. Do not backfill: silently swapping in a replacement is the
+    // reshuffle this exists to prevent.
+    const kept = pinnedIds.map((id) => byId.get(id)).filter((p): p is CatalogPlace => !!p);
+    return kept.length > 0 ? kept : ranked;
+  }, [pinnedIds, pool, ranked]);
 
   // ONLY the displayed shortlist is hydrated -- never `pool`, which is 200
   // rows of Layer 1 that exist so ranking has something to choose from. Spec
@@ -472,6 +547,7 @@ function Shortlist() {
       } finally {
         setReviewBusy(false);
         setReviewDismissed(true);
+        setPinnedIds(null); // a verdict changes the ranking inputs.
         void pendingReview.refetch();
         void catalog.refetch();
       }
@@ -635,6 +711,7 @@ function Shortlist() {
           // A lock-in, not a visit and not a verdict. It drives provisional
           // recency suppression and gives review capture its trigger; review
           // capture then resolves it into a verdict or into "didn't go".
+            setPinnedIds(null); // a lock-in is a real change; re-choose.
           void supabase
             .from("place_lockins")
             .insert({ user_id: userId, place_id: c.placeId })
