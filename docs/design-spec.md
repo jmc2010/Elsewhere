@@ -407,6 +407,10 @@ The coupling is one-directional and conditional:
   is the opposite of helpful.
 - The filter sheet remains independently reachable from its own chip, as §13
   describes. Nothing about the chain removes that.
+- Only from the **location chip**. The rural-exhausted screen's "Open it up to
+  Sanger" sets the same origin and must NOT chain: picking a town there means
+  *"I have run out of options"*, and asking someone to narrow at the moment
+  they have just been told there is nothing left is perverse.
 
 The wording changes with the context, and that is not decoration: "Narrow it
 down" and "Cancel" are both wrong in a sheet the user did not open. Nothing

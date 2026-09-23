@@ -6,6 +6,7 @@ import { ActivityIndicator, Linking, Pressable, ScrollView, StyleSheet, Text, Vi
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { CorrectionSheet, type CorrectionResult } from "@/components/CorrectionSheet";
+import { appTier } from "@/lib/appTier";
 import { ensureSession, supabase } from "@/lib/supabase";
 import { useTheme, type Theme, type ThemeName } from "@/theme/tokens";
 import { tabular, type } from "@/theme/type";
@@ -105,6 +106,7 @@ function PlaceDetail() {
   const insets = useSafeAreaInsets();
   const qc = useQueryClient();
   const [correcting, setCorrecting] = useState(false);
+  const [showError, setShowError] = useState(false);
   const arrivedToCorrect = correctParam === "1";
 
   const detail = useQuery({
@@ -134,7 +136,12 @@ function PlaceDetail() {
         // session_id makes the call attributable in google_api_usage, which
         // is how "one open, how many calls?" gets answered with a query
         // instead of an assumption.
-        body: { action: "detail", place_ids: [id], session_id: detailSessionId },
+        body: {
+          action: "detail",
+          place_ids: [id],
+          session_id: detailSessionId,
+          app_tier: appTier,
+        },
       });
       if (error) throw error;
       const payload = data as {
@@ -295,21 +302,57 @@ function PlaceDetail() {
           </View>
         ) : live.isError ? (
           /*
-            Say so. This block previously rendered NOTHING on error, and that
-            silence cost a whole round of cost testing: a broken edge function
-            looked identical to a cache hit, so "zero Google calls" read as a
-            triumph instead of a failure. A Layer 2 failure is not fatal --
-            the card above is complete without it -- but it must be visible.
+            Voice first, raw string one tap away -- both requirements are
+            real and this satisfies both rather than choosing.
+
+            A bare friendly message is not enough: "something went wrong" hid
+            a broken edge function for a full round of cost testing, because a
+            failure and a cache hit looked identical. But a raw exception
+            string is not something to hand a tester either.
+
+            So: name what failed and what still works, in the app's own voice
+            (§10 -- "something went wrong" is the chatbot phrasing that copy
+            rules out), with the actual error behind a disclosure and a copy
+            button. A tester who can send the real message is worth far more
+            than one who says it broke.
           */
           <View style={s.google}>
             <View style={s.googleHead}>
               <Text style={s.googleLabel}>From Google</Text>
             </View>
-            <Text style={s.fact}>
-              Couldn&apos;t reach Google just now. Everything above is ours and
-              still true.
+            <Text style={s.quotaHead}>
+              I couldn&apos;t pull the live details for this one.
             </Text>
-            <Text style={s.reviewer}>{(live.error as Error).message}</Text>
+            <Text style={s.fact}>Everything above is still yours.</Text>
+
+            <Pressable
+              onPress={() => setShowError((v) => !v)}
+              accessibilityRole="button"
+              hitSlop={8}
+            >
+              <Text style={s.disclose}>
+                {showError ? "Hide details" : "What happened?"}
+              </Text>
+            </Pressable>
+
+            {showError ? (
+              <View style={s.errorBox}>
+                <Text style={s.errorText} selectable>
+                  {(live.error as Error).message}
+                </Text>
+                {/*
+                  Long-press to select and copy, rather than a Copy button.
+                  expo-clipboard is a NATIVE module: importing it in an
+                  over-the-air update would crash every build that does not
+                  already have it compiled in -- the same failure that took an
+                  evening to find when the production environment was empty.
+                  A copy button is not worth a rebuild and a TestFlight
+                  resubmission; `selectable` gets the string out with one
+                  extra gesture and ships today.
+                */}
+                <Text style={s.disclose}>Press and hold to copy.</Text>
+              </View>
+            ) : null}
           </View>
         ) : g ? (
           <View style={s.google}>
@@ -440,6 +483,13 @@ const build = ({ colours: c, space, radius, hairline }: Theme) =>
     reviewBody: { flexShrink: 1, rowGap: 3 },
     reviewer: { ...type.tileMeta, color: c.ink },
     quotaHead: { ...type.voice, color: c.ink, marginBottom: space.sm },
+    disclose: { ...type.meta, color: c.brass, marginTop: space.md },
+    errorBox: {
+      marginTop: space.sm, padding: space.md,
+      borderWidth: hairline, borderColor: c.rule, borderRadius: radius.field,
+      backgroundColor: c.surface2, rowGap: space.sm,
+    },
+    errorText: { ...type.tileMeta, color: c.inkMuted },
     reviewText: { ...type.meta, color: c.inkMuted },
     pressed: { opacity: 0.6 },
   });

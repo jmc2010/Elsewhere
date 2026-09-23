@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Linking, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import Animated, {
   Easing,
@@ -119,6 +119,24 @@ export function SurpriseReveal({ candidates, onClose, onCommit }: SurpriseReveal
   }, [candidates]);
 
   const [index, setIndex] = useState(0);
+  /**
+   * The pending reroll timer.
+   *
+   * Held in a ref so it can actually be cancelled. It used to be a local
+   * `const t` with `return () => clearTimeout(t)` at the end of the callback
+   * -- which looks like a cleanup but is not one: React calls an event
+   * handler and discards its return value, so that clearTimeout never ran.
+   * Closing the reveal within 180ms of a reroll left a timer that fired into
+   * a screen the user had already left.
+   */
+  const rerollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // A real cleanup, in a real effect.
+  useEffect(() => {
+    return () => {
+      if (rerollTimer.current) clearTimeout(rerollTimer.current);
+    };
+  }, []);
   const [committed, setCommitted] = useState(false);
   const pick = sequence[index];
 
@@ -171,12 +189,13 @@ export function SurpriseReveal({ candidates, onClose, onCommit }: SurpriseReveal
     ruleWidth.value = withTiming(0, { duration: 120 });
     whyOpacity.value = withTiming(0, { duration: 120 });
 
-    const t = setTimeout(() => {
+    if (rerollTimer.current) clearTimeout(rerollTimer.current);
+    rerollTimer.current = setTimeout(() => {
+      rerollTimer.current = null;
       setIndex((i) => i + 1);
       nameShift.value = 8;
       play(true);
     }, 180);
-    return () => clearTimeout(t);
   }, [index, sequence.length, reduced, play, nameOpacity, nameShift, ruleWidth, whyOpacity]);
 
   const commit = useCallback(() => {

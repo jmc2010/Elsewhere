@@ -305,7 +305,20 @@ Deno.serve(async (req: Request) => {
   const { data: { user } } = await asUser.auth.getUser();
   if (!user) return json({ error: "authentication required" }, 401);
 
-  let payload: { action?: string; place_ids?: string[]; session_id?: string };
+  let payload: {
+    action?: string;
+    place_ids?: string[];
+    session_id?: string;
+    /**
+     * Which build is calling: development, preview or production.
+     *
+     * Advisory and unauthenticated ON PURPOSE. The tier can only LOWER the
+     * caller's daily quota, never raise it, so forging it gains nothing --
+     * claiming "production" yields the same 60 an absent marker would. That
+     * property is what makes it safe to take a client's word for.
+     */
+    app_tier?: string;
+  };
   try {
     payload = await req.json();
   } catch {
@@ -315,6 +328,7 @@ Deno.serve(async (req: Request) => {
   const action = payload.action ?? "hydrate";
   const ids = payload.place_ids ?? [];
   const sessionId = payload.session_id ?? null;
+  const appTier = payload.app_tier ?? null;
 
   if (action !== "hydrate" && action !== "detail") {
     return json({ error: `unknown action ${action}` }, 400);
@@ -402,6 +416,12 @@ Deno.serve(async (req: Request) => {
   }
   if (willCall.length > 0) {
     breakdown[detailSku] = willCall.length;
+  }
+
+  // Record the tier before reserving, so the reservation sees it on the very
+  // first call from a new build rather than from the second onward.
+  if (appTier) {
+    await db.rpc("note_app_tier", { p_user: user.id, p_tier: appTier });
   }
 
   const { data: quotaRow, error: quotaErr } = await db

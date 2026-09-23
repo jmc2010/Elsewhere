@@ -39,7 +39,10 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "lint": "expo lint"
+    "lint": "expo lint",
+    "env:cloud": "cp .env.cloud .env && echo 'Now pointing at CLOUD. Restart Metro (expo start -c).'",
+    "env:local": "cp .env.local .env && echo 'Now pointing at LOCAL. Needs supabase start. Restart Metro (expo start -c).'",
+    "env:which": "grep '^EXPO_PUBLIC_SUPABASE_URL=' .env || echo 'no .env \u2014 run npm run env:cloud'"
   },
   "private": true
 }

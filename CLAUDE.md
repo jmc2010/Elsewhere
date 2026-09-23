@@ -80,6 +80,35 @@ Consequences for anyone building features here:
 - Cold start matters competitively. Onboarding that seeds Layer 3 quickly is
   high-priority work.
 
+## Every migration runs against local first. No exceptions.
+
+Before a migration touches the cloud database, it must apply cleanly to a
+**local** one built from scratch:
+
+```bash
+supabase db reset          # drops, runs all migrations in order, applies seed.sql
+```
+
+Not "usually". Not "unless it looks simple". Every one.
+
+The asymmetry is the reason. **A broken client writes wrong-but-valid rows
+that can be deleted. A broken migration is unrecoverable** — it has already
+dropped the column, already rewritten the function, already lost the data,
+and the cloud database is the only copy of 54 migrations, a 39,765-row
+ingest, and every verdict anybody has recorded.
+
+`supabase db reset` also catches the failure that applying-in-sequence never
+does: a migration that works against *today's* schema but not against a
+schema built from scratch. Those pass in the cloud, where the earlier
+migrations already ran months ago, and fail the first time anyone needs to
+rebuild — which is the moment they are least able to cope with it.
+
+Local is seeded with a subset, not the catalog: Valley View, Gainesville and
+a downtown Dallas slice, ~1,470 rows. Regenerate with
+`scripts/dev/generate_seed.sh`. Density is what the screens branch on, so
+three density regimes is what development needs; 39k rows would only be
+slower to reset.
+
 ## Before stopping: rewrite the Next section
 
 **At the end of every session, rewrite the `## Next` section of

@@ -25,6 +25,7 @@ import { LocationPicker, type Origin, type Town } from "@/components/LocationPic
 import { ReviewCapture, type ReviewResult, type Tag } from "@/components/ReviewCapture";
 import { SurpriseReveal, type RevealCandidate } from "@/components/SurpriseReveal";
 import { tuning } from "@/config/tuning";
+import { appTier } from "@/lib/appTier";
 import { hasSeenColdStart } from "@/lib/coldStart";
 import {
   cancelReviewPrompt,
@@ -588,7 +589,12 @@ function Shortlist() {
     gcTime: 10 * 60 * 1000,
     queryFn: async (): Promise<HydrateResponse> => {
       const { data, error } = await supabase.functions.invoke("places-proxy", {
-        body: { action: "hydrate", place_ids: missing, session_id: sessionId },
+        body: {
+          action: "hydrate",
+          place_ids: missing,
+          session_id: sessionId,
+          app_tier: appTier,
+        },
       });
       if (error) throw error;
       return data as HydrateResponse;
@@ -714,6 +720,9 @@ function Shortlist() {
             Only for a town, and only when nothing is set: "Where I am" is the
             default state and carries no such intent, and re-asking somebody
             who has already answered is the opposite of helpful.
+
+            And only from THIS sheet. The exhausted screen's escape hatch sets
+            the same origin without chaining -- see onGoTo there.
           */
           const wantsIntent = next.kind === "town" && activeFilterCount === 0;
           setSheet(wantsIntent ? "what-first" : "none");
@@ -854,7 +863,15 @@ function Shortlist() {
             towns={towns.data ?? []}
             remaining={pool.length}
             radiusMiles={radiusMiles}
-            onGoTo={(t) => setOrigin({ kind: "town", name: t.locality, lat: t.lat, lon: t.lon })}
+            onGoTo={(t) => {
+              // Deliberately does NOT chain into the filter sheet. Picking
+              // Gainesville from HERE means "I have run out of options" --
+              // asking someone to narrow at the moment they have just been
+              // told there is nothing left is perverse. The chain belongs to
+              // the location chip, where choosing a town is an intent.
+              setOrigin({ kind: "town", name: t.locality, lat: t.lat, lon: t.lon });
+              setPinnedIds(null);
+            }}
             onWiden={() => setRadiusMiles(tuning.exhausted.widenedRadiusMiles)}
             widened={radiusMiles !== tuning.catalog.radiusMiles}
           />

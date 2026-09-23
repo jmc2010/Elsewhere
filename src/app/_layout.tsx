@@ -5,6 +5,7 @@ import { createContext, useCallback, useContext, useEffect, useState } from "rea
 import { AppState, StyleSheet, Text, View } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
+import { EnvironmentBadge } from "@/components/EnvironmentBadge";
 import {
   loadThemePreference,
   saveThemePreference,
@@ -109,6 +110,8 @@ export default function RootLayout() {
           <SafeAreaProvider>
             <StatusBar style={preference === "light" ? "dark" : "auto"} />
             <Stack screenOptions={{ headerShown: false }} />
+            {/* Above every screen, never in production. See the component. */}
+            <EnvironmentBadge />
           </SafeAreaProvider>
         </ThemeProvider>
       </ThemeControlContext.Provider>

@@ -6,6 +6,10 @@ web-build/
 .env
 .env.*
 !.env.example
+# Both hold publishable values only, and a half-switched .env is a bug that
+# looks like an auth failure. Committing them makes switching atomic.
+!.env.cloud
+!.env.local
 .DS_Store
 ios/
 android/

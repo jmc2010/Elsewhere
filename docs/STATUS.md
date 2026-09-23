@@ -382,6 +382,45 @@ This is worth writing down because the default drifts the other way: while
 both channels were empty it was simpler to mirror, and mirroring is what
 happened for the first evening. It should not continue.
 
+### A null that resolves itself beats a guess that persists
+
+Thirteen anonymous accounts have `app_tier` null, so they resolve to the
+global 60 rather than the tier cap of 20. They were deliberately NOT
+backfilled.
+
+The principle, which generalises well beyond this column: **a null that
+corrects itself on first use is better than a guess written into the
+database.** A backfilled `app_tier = 'preview'` would be a claim nobody
+verified, indistinguishable from a real observation the moment it lands, and
+wrong forever for any account that was actually something else. The null is
+honest about not knowing, and the first real call replaces it with an
+observation.
+
+The exposure is theoretical anyway: a dormant account makes no calls, so its
+cap is never reached. Nothing is spent by being patient.
+
+### Hygiene before external testers: the account litter
+
+Thirteen anonymous accounts exist that are artifacts of setup — created by
+device installs, reinstalls, and diagnostic calls during development. They
+have no verdicts and no lock-ins.
+
+**Before anyone external is invited**, they should be distinguishable from
+real users, or every metric computed over `auth.users` is wrong from day one.
+The filter is straightforward:
+
+```sql
+select u.id
+from auth.users u
+where not exists (select 1 from place_verdicts v where v.user_id = u.id)
+  and not exists (select 1 from place_lockins l where l.user_id = u.id);
+```
+
+**Not to be done now, and not by deleting anything.** Marking is enough —
+deletion cascades to rows that may be the only evidence of how something
+behaved, and "this account is mine" is a fact worth keeping rather than
+erasing. Revisit when the first external tester is invited, not before.
+
 ### Known gaps, carried forward deliberately
 
 - **A raw error message can still reach a user.** Place detail renders the
