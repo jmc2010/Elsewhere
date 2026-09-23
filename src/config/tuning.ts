@@ -156,6 +156,24 @@ export const tuning = {
      * somewhere else the next day.
      */
     unresolvedLockinDays: 3,
+    /**
+     * How long after a lock-in to ask how it went.
+     *
+     * Six hours: long enough that nobody is asked mid-meal, short enough that
+     * the evening is still the evening. This is the single most important
+     * number in the product's data collection, because it decides whether the
+     * question arrives at a moment worth answering.
+     *
+     * The evidence that it matters: before the local notification existed,
+     * review capture only fired as an interstitial on the next cold open --
+     * and after dinner that is tomorrow or never. The only real account had 6
+     * verdicts, every one of them `known` from the recognition grid. Nothing
+     * had ever asked at the right time, so the moat collected nothing.
+     *
+     * Tune against: prompt answer rate, and how many fire while somebody is
+     * still at the table.
+     */
+    reviewPromptHours: 6,
   },
 
   /**

@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { useMemo, useState } from "react";
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { tuning } from "@/config/tuning";
@@ -66,6 +66,31 @@ export function LocationPicker({
   const s = styles(theme);
   const insets = useSafeAreaInsets();
   const [radius, setRadius] = useState(radiusMiles);
+  const [query, setQuery] = useState("");
+
+  /**
+   * Nearest-first, or name-matched when searching.
+   *
+   * The list is nearest-first because that is what you usually want. But
+   * "somewhere I'm heading" is the case that makes owning the catalog worth
+   * anything -- deciding where to eat in a town before you get there is a
+   * decision a map-first competitor handles badly, because they are
+   * overwhelmingly near-me first. A list capped at the nearest few towns
+   * quietly removes exactly that, so typing searches the WHOLE catalog of
+   * towns, at any distance.
+   */
+  const shown = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return towns;
+    return towns
+      .filter((t) => t.locality.toLowerCase().includes(q))
+      // When searching, the nearest match is rarely the point -- somebody
+      // typing "Denton" wants Denton. Rank by how early the match lands, then
+      // by how many places are there.
+      .sort((a, b) =>
+        a.locality.toLowerCase().indexOf(q) - b.locality.toLowerCase().indexOf(q) ||
+        b.place_count - a.place_count);
+  }, [towns, query]);
 
   // The shape switch. Below the threshold the town list is the useful
   // control; above it, miles are.
@@ -117,8 +142,23 @@ export function LocationPicker({
           <Text style={s.lab}>
             {dense ? "Somewhere I'm heading" : "Or somewhere I'm heading"}
           </Text>
+          <TextInput
+            value={query}
+            onChangeText={setQuery}
+            placeholder="Search any town…"
+            placeholderTextColor={theme.colours.inkFaint}
+            style={s.search}
+            autoCorrect={false}
+            autoCapitalize="words"
+            returnKeyType="search"
+          />
           <View style={s.towns}>
-            {towns.map((t) => {
+            {shown.length === 0 ? (
+              <Text style={s.none}>
+                Nothing called that with somewhere to eat in it.
+              </Text>
+            ) : null}
+            {shown.map((t) => {
               const on = origin.kind === "town" && origin.name === t.locality;
               return (
                 <Pressable
@@ -193,6 +233,13 @@ const build = ({ colours: c, space, radius, hairline }: Theme) =>
     pillLabel: { ...type.meta, color: c.ink },
     pillLabelOn: { color: c.ground },
 
+    search: {
+      ...type.body, color: c.ink,
+      borderWidth: hairline, borderColor: c.ruleStrong, borderRadius: radius.field,
+      paddingHorizontal: space.md, paddingVertical: space.sm,
+      marginBottom: space.sm,
+    },
+    none: { ...type.meta, color: c.inkFaint, paddingVertical: space.md },
     towns: {},
     town: {
       flexDirection: "row", justifyContent: "space-between", alignItems: "baseline",

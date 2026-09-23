@@ -1,13 +1,44 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
-import { useEffect, useState } from "react";
-import { AppState } from "react-native";
+import { createContext, useCallback, useContext, useEffect, useState } from "react";
+import { AppState, StyleSheet, Text, View } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
-// TanStack Query, and deliberately not PowerSync (spec §8). Offline-first is
-// not a requirement for a connected dining decision, and PowerSync's
-// conflict resolution buys nothing here.
+import {
+  loadThemePreference,
+  saveThemePreference,
+  type ThemePreference,
+} from "@/lib/themePreference";
+import { palettes, ThemeProvider } from "@/theme/tokens";
+import { useAppFonts } from "@/theme/type";
+
+/**
+ * Fonts and theme are established ONCE, here, for the whole app.
+ *
+ * They used to be per-screen: every route called useAppFonts() and wrapped
+ * itself in a ThemeProvider. That worked while the theme only followed the
+ * OS, because every screen independently reached the same answer. The moment
+ * the user can CHOOSE, it stops working -- each screen would load the stored
+ * preference asynchronously and render the old theme until it arrived, so
+ * every navigation would flash.
+ */
+
+interface ThemeControl {
+  preference: ThemePreference;
+  setPreference: (p: ThemePreference) => void;
+}
+
+const ThemeControlContext = createContext<ThemeControl>({
+  preference: "system",
+  setPreference: () => {},
+});
+
+/** For the shelf's Settings section. */
+export function useThemeControl(): ThemeControl {
+  return useContext(ThemeControlContext);
+}
+
 export default function RootLayout() {
   const [client] = useState(
     () =>
@@ -24,24 +55,29 @@ export default function RootLayout() {
       }),
   );
 
+  const [fontsLoaded, fontError] = useAppFonts();
+  // null while unread. Rendering before it lands would show the phone's theme
+  // and then swap, which is the flash this exists to prevent.
+  const [preference, setPreferenceState] = useState<ThemePreference | null>(null);
+
+  useEffect(() => {
+    void loadThemePreference().then(setPreferenceState);
+  }, []);
+
+  const setPreference = useCallback((p: ThemePreference) => {
+    setPreferenceState(p); // immediate, so the toggle feels instant
+    void saveThemePreference(p);
+  }, []);
+
   /**
    * Drop cached Google responses when the app backgrounds.
    *
-   * Place detail calls the Atmosphere SKU, which is the most expensive thing
-   * the app does, and it fires on every open -- so tapping between two places
-   * would charge for the same place twice. The query cache holds the response
-   * for the life of a foreground session, which is ordinary HTTP behaviour
-   * rather than storage: in memory only, no persister is configured, nothing
-   * reaches disk, and it is gone the moment the app backgrounds.
-   *
-   * Flagged in docs/STATUS.md as a licensing question rather than settled
-   * here. The Google Maps Platform Terms allow caching place IDs indefinitely
-   * and almost nothing else; holding a response for minutes inside one screen
-   * session reads as request scope to me, but that is a reading and not a
-   * ruling.
-   *
-   * Only the Google queries are cleared. Layer 1 and Layer 3 are ours and
-   * have no such constraint.
+   * Place detail calls the Atmosphere SKU and it fires on every open, so
+   * tapping between two places would charge for the same place twice. The
+   * cache is in memory only, no persister is configured, nothing reaches
+   * disk, and it is gone on background -- ordinary HTTP behaviour rather than
+   * storage. Flagged in docs/STATUS.md as a licensing question, not settled
+   * here. Only the Google queries are cleared; Layer 1 and Layer 3 are ours.
    */
   useEffect(() => {
     const sub = AppState.addEventListener("change", (next) => {
@@ -53,12 +89,38 @@ export default function RootLayout() {
     return () => sub.remove();
   }, [client]);
 
+  if (fontError) {
+    // Name the font rather than rendering in a fallback face -- the whole
+    // static-instance exercise exists so that cannot happen silently.
+    return (
+      <View style={bare.centre}>
+        <Text style={bare.text}>Fonts failed to load: {fontError.message}</Text>
+      </View>
+    );
+  }
+  if (!fontsLoaded || preference === null) {
+    return <View style={bare.blank} />;
+  }
+
   return (
     <QueryClientProvider client={client}>
-      <SafeAreaProvider>
-        <StatusBar style="auto" />
-        <Stack screenOptions={{ headerShown: false }} />
-      </SafeAreaProvider>
+      <ThemeControlContext.Provider value={{ preference, setPreference }}>
+        <ThemeProvider preference={preference}>
+          <SafeAreaProvider>
+            <StatusBar style={preference === "light" ? "dark" : "auto"} />
+            <Stack screenOptions={{ headerShown: false }} />
+          </SafeAreaProvider>
+        </ThemeProvider>
+      </ThemeControlContext.Provider>
     </QueryClientProvider>
   );
 }
+
+const bare = StyleSheet.create({
+  blank: { flex: 1, backgroundColor: palettes.dark.ground },
+  centre: {
+    flex: 1, alignItems: "center", justifyContent: "center",
+    padding: 24, backgroundColor: palettes.dark.ground,
+  },
+  text: { color: palettes.dark.ink, fontSize: 15 },
+});

@@ -134,18 +134,32 @@ export interface ThemeProviderProps {
    */
   force?: ThemeName;
   /**
+   * The user's stored choice. "system" (or omitted) follows the phone.
+   *
+   * Distinct from `force`, which is a harness tool for rendering both
+   * palettes at once and must keep overriding everything.
+   */
+  preference?: "system" | ThemeName;
+  /**
    * Pin the text scale rather than following the OS. Harness only -- see
    * `Theme.fontScaleOverride`.
    */
   fontScale?: number;
 }
 
-export function ThemeProvider({ children, force, fontScale }: ThemeProviderProps) {
+export function ThemeProvider({ children, force, preference, fontScale }: ThemeProviderProps) {
   const scheme = useColorScheme();
   // useColorScheme() returns null when the platform has no preference yet.
   // Falling back to dark rather than light is the spec's position: this app is
   // used in a car, often after dark. A lit sign at dusk is the native state.
-  const name: ThemeName = force ?? (scheme === "light" ? "light" : "dark");
+  // Precedence: harness override, then the user's choice, then the phone.
+  // The final fallback is DARK, not light: useColorScheme() returns null when
+  // the platform has no preference yet, and §1's position is that a lit sign
+  // at dusk is the native state, not the alternate.
+  const chosen: ThemeName | null =
+    preference && preference !== "system" ? preference : null;
+  const name: ThemeName =
+    force ?? chosen ?? (scheme === "light" ? "light" : "dark");
   const override = fontScale ?? null;
   const theme = useMemo(() => build(name, override), [name, override]);
 

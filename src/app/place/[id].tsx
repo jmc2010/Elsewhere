@@ -7,8 +7,8 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { CorrectionSheet, type CorrectionResult } from "@/components/CorrectionSheet";
 import { ensureSession, supabase } from "@/lib/supabase";
-import { palettes, ThemeProvider, useTheme, type Theme, type ThemeName } from "@/theme/tokens";
-import { tabular, type, useAppFonts } from "@/theme/type";
+import { useTheme, type Theme, type ThemeName } from "@/theme/tokens";
+import { tabular, type } from "@/theme/type";
 
 /**
  * Place detail (design spec §7 attribution, §5 corrections).
@@ -91,16 +91,7 @@ const VERDICT_LABEL: Record<string, string> = {
 };
 
 export default function PlaceDetailRoute() {
-  const [loaded, error] = useAppFonts();
-  if (error) {
-    return <View style={bare.centre}><Text style={bare.text}>{error.message}</Text></View>;
-  }
-  if (!loaded) return <View style={bare.blank} />;
-  return (
-    <ThemeProvider>
-      <PlaceDetail />
-    </ThemeProvider>
-  );
+  return <PlaceDetail />;
 }
 
 function PlaceDetail() {
@@ -453,8 +444,3 @@ const build = ({ colours: c, space, radius, hairline }: Theme) =>
     pressed: { opacity: 0.6 },
   });
 
-const bare = StyleSheet.create({
-  blank: { flex: 1, backgroundColor: palettes.dark.ground },
-  centre: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24, backgroundColor: palettes.dark.ground },
-  text: { color: palettes.dark.ink, fontSize: 15 },
-});

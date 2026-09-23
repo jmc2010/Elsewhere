@@ -152,3 +152,25 @@ class of failure entirely. It affects web bundling only — no rebuild needed.
 
 If web ever becomes a target, the fix is to guard the Supabase client's
 storage for server rendering rather than to switch `output` back.
+
+
+## 1.0.1 — expo-notifications, 2026-09-22
+
+**This release needs a NEW APK. It cannot ship over the air.**
+
+`expo-notifications` is a native module, added for the review prompt (spec
+§4). New native code means a new binary, and `runtimeVersion` follows
+`version`, so the app version went 1.0.0 -> 1.0.1 deliberately.
+
+That bump is not bookkeeping — it is a safety interlock. Had the version
+stayed at 1.0.0, the new JS bundle would have been served to the OLD APK,
+which has no notifications module compiled in, and it would have crashed on
+launch at the import. Bumping the version means the old build stops matching
+these updates and keeps running the last bundle that suits it.
+
+```bash
+npx eas build -p android --profile preview
+```
+
+Install the resulting APK. Updates published after this point target runtime
+1.0.1 and will not reach the 1.0.0 build.

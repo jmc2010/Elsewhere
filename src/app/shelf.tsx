@@ -3,10 +3,12 @@ import { router } from "expo-router";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { useThemeControl } from "@/app/_layout";
 import { tuning } from "@/config/tuning";
+import type { ThemePreference } from "@/lib/themePreference";
 import { supabase } from "@/lib/supabase";
-import { palettes, ThemeProvider, useTheme, type Theme, type ThemeName } from "@/theme/tokens";
-import { type, useAppFonts } from "@/theme/type";
+import { useTheme, type Theme, type ThemeName } from "@/theme/tokens";
+import { type } from "@/theme/type";
 
 /**
  * The shelf (design spec §13).
@@ -42,16 +44,7 @@ interface ShelfPlace {
 }
 
 export default function ShelfRoute() {
-  const [loaded, error] = useAppFonts();
-  if (error) {
-    return <View style={bare.centre}><Text style={bare.text}>{error.message}</Text></View>;
-  }
-  if (!loaded) return <View style={bare.blank} />;
-  return (
-    <ThemeProvider>
-      <Shelf />
-    </ThemeProvider>
-  );
+  return <Shelf />;
 }
 
 function Shelf() {
@@ -59,6 +52,7 @@ function Shelf() {
   const s = styles(theme);
   const insets = useSafeAreaInsets();
   const qc = useQueryClient();
+  const { preference, setPreference } = useThemeControl();
 
   const rows = useQuery({
     queryKey: ["shelf"],
@@ -162,6 +156,44 @@ function Shelf() {
 
             <View style={s.section}>
               <Text style={s.sectionTitle}>Settings</Text>
+
+              <Text style={s.settingLabel}>Appearance</Text>
+              {/*
+                Dark is the primary theme, not the alternate (§1) -- the app is
+                used in a car, often after dark. Following the phone is right
+                for most people, but on a phone set to light it shows the
+                daylight theme at 9pm, which is exactly what §11 argues
+                against. Hence a choice, defaulting to System.
+              */}
+              <View style={s.segment}>
+                {(["system", "dark", "light"] as ThemePreference[]).map((opt) => {
+                  const on = preference === opt;
+                  return (
+                    <Pressable
+                      key={opt}
+                      onPress={() => setPreference(opt)}
+                      accessibilityRole="radio"
+                      accessibilityState={{ selected: on }}
+                      style={({ pressed }) => [
+                        s.segmentItem, on && s.segmentItemOn, pressed && !on && s.pressed,
+                      ]}
+                    >
+                      <Text style={[s.segmentLabel, on && s.segmentLabelOn]}>
+                        {opt === "system" ? "System" : opt === "dark" ? "Dark" : "Light"}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+              <Text style={s.hint}>
+                {preference === "system"
+                  ? "Following your phone."
+                  : preference === "dark"
+                    ? "Always dark, whatever your phone says."
+                    : "Always light. Dark reads better in a car at night."}
+              </Text>
+
+              <Text style={s.settingLabel}>Account</Text>
               <Text style={s.hint}>
                 No account yet, and that&apos;s deliberate — Elsewhere asks for
                 one only when there&apos;s something worth protecting.
@@ -235,6 +267,21 @@ const build = ({ colours: c, space, radius, hairline }: Theme) =>
     sectionTitle: { ...type.label, color: c.inkFaint, marginBottom: 6 },
     hint: { ...type.tileMeta, color: c.inkMuted, marginBottom: space.md },
     empty: { ...type.meta, color: c.inkFaint },
+    settingLabel: { ...type.body, color: c.ink, marginTop: space.lg, marginBottom: space.sm },
+    // Drawn, not a platform segmented control -- an iOS segmented control and
+    // a Material chip group would make one product look like two.
+    segment: {
+      flexDirection: "row",
+      borderWidth: hairline, borderColor: c.ruleStrong,
+      borderRadius: radius.pill, padding: 3, columnGap: 3,
+    },
+    segmentItem: {
+      flexGrow: 1, flexBasis: 0, alignItems: "center",
+      paddingVertical: 8, borderRadius: radius.pill,
+    },
+    segmentItemOn: { backgroundColor: c.ink },
+    segmentLabel: { ...type.meta, color: c.inkMuted },
+    segmentLabelOn: { color: c.ground },
 
     row: {
       flexDirection: "row", justifyContent: "space-between", alignItems: "center",
@@ -249,8 +296,3 @@ const build = ({ colours: c, space, radius, hairline }: Theme) =>
     pressed: { opacity: 0.6 },
   });
 
-const bare = StyleSheet.create({
-  blank: { flex: 1, backgroundColor: palettes.dark.ground },
-  centre: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24, backgroundColor: palettes.dark.ground },
-  text: { color: palettes.dark.ink, fontSize: 15 },
-});

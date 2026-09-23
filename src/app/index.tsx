@@ -26,10 +26,15 @@ import { ReviewCapture, type ReviewResult, type Tag } from "@/components/ReviewC
 import { SurpriseReveal, type RevealCandidate } from "@/components/SurpriseReveal";
 import { tuning } from "@/config/tuning";
 import { hasSeenColdStart } from "@/lib/coldStart";
+import {
+  cancelReviewPrompt,
+  lockinFromNotificationTap,
+  scheduleReviewPrompt,
+} from "@/lib/reviewPrompt";
 import { catalogSeed } from "@/lib/seed";
 import { ensureSession, supabase } from "@/lib/supabase";
-import { palettes, ThemeProvider, useTheme, type Theme, type ThemeName } from "@/theme/tokens";
-import { type, useAppFonts } from "@/theme/type";
+import { useTheme, type Theme, type ThemeName } from "@/theme/tokens";
+import { type } from "@/theme/type";
 
 /** Mirrors catalog_search()'s RETURNS TABLE. */
 interface CatalogPlace {
@@ -136,21 +141,12 @@ type Permission = "unknown" | "explaining" | "granted" | "denied";
  */
 type LocateFailure = "no_fix" | null;
 
+/**
+ * Fonts and theme now live in the root layout, so this is just the gate for
+ * the dev harness override.
+ */
 export default function Home() {
-  const [fontsLoaded, fontError] = useAppFonts();
-  if (fontError) {
-    return (
-      <View style={bare.centre}>
-        <Text style={bare.text}>Fonts failed to load: {fontError.message}</Text>
-      </View>
-    );
-  }
-  if (!fontsLoaded) return <View style={bare.blank} />;
-  return (
-    <ThemeProvider>
-      <Shortlist />
-    </ThemeProvider>
-  );
+  return <Shortlist />;
 }
 
 function Shortlist() {
@@ -191,7 +187,7 @@ function Shortlist() {
   // hatch the exhausted screen offers, and the one thing that screen can do.
   const [origin, setOrigin] = useState<Origin>({ kind: "me" });
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
-  const [sheet, setSheet] = useState<"none" | "where" | "what">("none");
+  const [sheet, setSheet] = useState<"none" | "where" | "what" | "what-first">("none");
   // Explicitly number: `tuning` is `as const`, so inference would pin this to
   // the literal 5 and refuse the widened value.
   const [radiusMiles, setRadiusMiles] = useState<number>(tuning.catalog.radiusMiles);
@@ -200,6 +196,10 @@ function Shortlist() {
   // Dismissed for this run only. "Later" must not mean "never" -- the prompt
   // is the only way a verdict ever gets recorded.
   const [reviewDismissed, setReviewDismissed] = useState(false);
+  // Set when the app was opened by tapping "How was X?". Takes precedence
+  // over the oldest-unresolved query: the user is answering a specific
+  // question and being shown a different place would be baffling.
+  const [tappedLockinId, setTappedLockinId] = useState<string | null>(null);
   const [reviewBusy, setReviewBusy] = useState(false);
 
   const [sessionId] = useState(
@@ -218,6 +218,10 @@ function Shortlist() {
     if (!userId) return;
     hasSeenColdStart().then((seen) => setNeedsColdStart(!seen));
   }, [userId]);
+
+  useEffect(() => {
+    void lockinFromNotificationTap().then(setTappedLockinId);
+  }, []);
 
   useEffect(() => {
     Location.getForegroundPermissionsAsync().then(({ status }) => {
@@ -301,7 +305,10 @@ function Shortlist() {
       const { data, error } = await supabase.rpc("catalog_localities", {
         p_lat: coords!.lat,
         p_lon: coords!.lon,
-        p_limit: 25,
+        // The WHOLE town list, not the nearest few. The picker searches it by
+        // name, and "somewhere I'm heading" is meaningless if the list stops
+        // at 25 miles. It is one free Layer 1 query, cached for an hour.
+        p_limit: 500,
       });
       if (error) throw error;
       return (data ?? []) as LocalityRow[];
@@ -470,14 +477,29 @@ function Shortlist() {
   // The oldest unresolved lock-in, with the place's name. A few hours' delay
   // so somebody is not asked how dinner was while they are still eating it.
   const pendingReview = useQuery({
-    queryKey: ["pending-review", userId],
+    // Keyed on the tapped id too: arriving from a notification must not show
+    // whatever happens to be oldest.
+    queryKey: ["pending-review", userId, tappedLockinId],
     enabled: userId !== null,
     queryFn: async (): Promise<PendingReview | null> => {
-      const { data, error } = await supabase
+      let q = supabase
         .from("place_lockins")
         .select("id, place_id, locked_at, places(display_name)")
-        .is("resolved_at", null)
-        .lt("locked_at", new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString())
+        .is("resolved_at", null);
+
+      if (tappedLockinId) {
+        // The user tapped "How was X?" -- answer X, whatever else is waiting.
+        q = q.eq("id", tappedLockinId);
+      } else {
+        q = q.lt(
+          "locked_at",
+          new Date(
+            Date.now() - tuning.recency.reviewPromptHours * 60 * 60 * 1000,
+          ).toISOString(),
+        );
+      }
+
+      const { data, error } = await q
         .order("locked_at", { ascending: true })
         .limit(1);
       if (error) throw error;
@@ -542,6 +564,9 @@ function Shortlist() {
           .from("place_lockins")
           .update({ resolved_at: new Date().toISOString(), did_go: didGo })
           .eq("id", lockinId);
+        // Answered early -- do not buzz this evening about a meal already
+        // reviewed. That reads as the app not listening.
+        await cancelReviewPrompt(lockinId);
       } catch (e) {
         console.warn("review not saved:", e instanceof Error ? e.message : String(e));
       } finally {
@@ -679,18 +704,31 @@ function Shortlist() {
         onPick={(next, miles) => {
           setOrigin(next);
           setRadiusMiles(miles);
-          setSheet("none");
+          /*
+            Choosing a TOWN is a travel decision, and a travel decision almost
+            always arrives with an intent already attached -- "we're driving to
+            Gainesville" is usually "...for barbecue". So ask what they're
+            after next, rather than dropping them on a list and making them
+            find the filter chip to say the thing they already had in mind.
+
+            Only for a town, and only when nothing is set: "Where I am" is the
+            default state and carries no such intent, and re-asking somebody
+            who has already answered is the opposite of helpful.
+          */
+          const wantsIntent = next.kind === "town" && activeFilterCount === 0;
+          setSheet(wantsIntent ? "what-first" : "none");
         }}
       />
     );
   }
 
-  if (sheet === "what") {
+  if (sheet === "what" || sheet === "what-first") {
     return (
       <FilterSheet
         groups={cuisineGroups.data ?? []}
         moods={myTags.data?.moods ?? []}
         initial={filters}
+        askingIntentFor={sheet === "what-first" && origin.kind === "town" ? origin.name : null}
         onCancel={() => setSheet("none")}
         // Committed ONCE, here, on dismissal. Nothing behind the sheet
         // reflows while it is open (§6).
@@ -715,12 +753,21 @@ function Shortlist() {
           void supabase
             .from("place_lockins")
             .insert({ user_id: userId, place_id: c.placeId })
-            .then(({ error }) => {
+            .select("id")
+            .single()
+            .then(({ data: row, error }) => {
               // Deliberately not surfaced. The user has decided where they are
               // going and is about to put the phone down; an error toast at
               // that moment interrupts the one thing the app exists to finish.
               // The cost of a lost lock-in is one redundant suggestion.
-              if (error) console.warn("lock-in not recorded:", error.message);
+              if (error) {
+                console.warn("lock-in not recorded:", error.message);
+                return;
+              }
+              // Ask at a moment worth answering. Without this the prompt only
+              // ever fires as an interstitial on the next cold open, and after
+              // dinner that is tomorrow or never.
+              if (row) void scheduleReviewPrompt(row.id, c.placeId, c.name);
             });
         }}
       />
@@ -758,6 +805,71 @@ function Shortlist() {
             <Text style={s.shelfLink}>Yours</Text>
           </Pressable>
         </View>
+        {pool.length === 0 && activeFilterCount > 0 ? (
+          /*
+            Nothing matched, and a filter is why. §10: "Nothing out here fits
+            that." The escape hatch is the point -- this state is reachable by
+            filtering somewhere dense and then moving the search home, and
+            without a way out from HERE the only remaining control is the
+            filter sheet, which the user has no particular reason to suspect.
+          */
+          <View style={s.exhausted}>
+            <View style={s.mark} />
+            <Text style={s.head}>Nothing out here fits that.</Text>
+            <Text style={s.sub}>
+              {origin.kind === "town"
+                ? `No matches within ${radiusMiles} miles of ${origin.name}.`
+                : `No matches within ${radiusMiles} miles.`}{" "}
+              The filter came with you from wherever you set it.
+            </Text>
+            <Pressable
+              onPress={() => setFilters(DEFAULT_FILTERS)}
+              accessibilityRole="button"
+              style={({ pressed }) => [s.btn, pressed && s.btnPressed]}
+            >
+              <Text style={s.btnLabel}>Clear the filters</Text>
+            </Pressable>
+          </View>
+        ) : pool.length === 0 ? (
+          <View style={s.exhausted}>
+            <View style={s.mark} />
+            <Text style={s.head}>Nothing out here.</Text>
+            <Text style={s.sub}>
+              No open places within {radiusMiles} miles
+              {origin.kind === "town" ? ` of ${origin.name}` : ""}. Try somewhere
+              you&apos;re heading, or widen the search.
+            </Text>
+            <Pressable
+              onPress={() => setSheet("where")}
+              accessibilityRole="button"
+              style={({ pressed }) => [s.btn, pressed && s.btnPressed]}
+            >
+              <Text style={s.btnLabel}>Search somewhere else</Text>
+            </Pressable>
+          </View>
+        ) : exhausted ? (
+          <Exhausted
+            count={pool.length}
+            here={origin.kind === "town" ? origin.name : null}
+            towns={towns.data ?? []}
+            remaining={pool.length}
+            radiusMiles={radiusMiles}
+            onGoTo={(t) => setOrigin({ kind: "town", name: t.locality, lat: t.lat, lon: t.lon })}
+            onWiden={() => setRadiusMiles(tuning.exhausted.widenedRadiusMiles)}
+            widened={radiusMiles !== tuning.catalog.radiusMiles}
+          />
+        ) : (
+          <>
+            <Text style={s.head}>
+              {shortlist.length === 1
+                ? "One I'd actually send you to"
+                : `${spell(shortlist.length)} I'd actually send you to`}
+            </Text>
+            <Text style={s.sub}>
+              Out of {pool.length} within {radiusMiles} miles
+              {origin.kind === "town" ? ` of ${origin.name}` : ""}.
+            </Text>
+
         <View style={s.chips}>
           <Pressable
             onPress={() => setSheet("where")}
@@ -784,28 +896,6 @@ function Shortlist() {
             </Text>
           </Pressable>
         </View>
-        {exhausted ? (
-          <Exhausted
-            count={pool.length}
-            here={origin.kind === "town" ? origin.name : null}
-            towns={towns.data ?? []}
-            remaining={pool.length}
-            radiusMiles={radiusMiles}
-            onGoTo={(t) => setOrigin({ kind: "town", name: t.locality, lat: t.lat, lon: t.lon })}
-            onWiden={() => setRadiusMiles(tuning.exhausted.widenedRadiusMiles)}
-            widened={radiusMiles !== tuning.catalog.radiusMiles}
-          />
-        ) : (
-          <>
-            <Text style={s.head}>
-              {shortlist.length === 1
-                ? "One I'd actually send you to"
-                : `${spell(shortlist.length)} I'd actually send you to`}
-            </Text>
-            <Text style={s.sub}>
-              Out of {pool.length} within {radiusMiles} miles
-              {origin.kind === "town" ? ` of ${origin.name}` : ""}.
-            </Text>
 
             <View style={s.list}>
               {shortlist.map((p, i) => (
@@ -854,18 +944,35 @@ function Shortlist() {
           card without a scrim; the shadow is platform-split because iOS and
           Android disagree about how to draw one.
         */
-        <View
-          style={[s.floatWrap, { bottom: insets.bottom + theme.space.md }]}
-          pointerEvents="box-none"
-        >
+        <>
+          {/*
+            The list must not be visible running under the action or through
+            the gesture area. expo-linear-gradient is a native module and this
+            is meant to ship over the air, so the fade is four stacked bands of
+            the ground colour at increasing opacity -- crude, but it reads as a
+            gradient at this size and costs no rebuild.
+          */}
+          <View
+            style={[s.fadeWrap, { height: insets.bottom + 96 }]}
+            pointerEvents="none"
+          >
+            {[0.15, 0.4, 0.75, 1].map((o, i) => (
+              <View key={i} style={[s.fadeBand, { opacity: o }]} />
+            ))}
+          </View>
+          <View
+            style={[s.floatWrap, { bottom: insets.bottom + theme.space.md }]}
+            pointerEvents="box-none"
+          >
           <Pressable
             onPress={() => setRevealOpen(true)}
             accessibilityRole="button"
             style={({ pressed }) => [s.float, pressed && s.btnPressed]}
           >
             <Text style={s.floatLabel}>You pick.</Text>
-          </Pressable>
-        </View>
+            </Pressable>
+          </View>
+        </>
       ) : null}
     </View>
   );
@@ -1117,7 +1224,13 @@ const build = ({ colours: c, space, radius, hairline }: Theme) =>
     list: { marginTop: space.lg },
     topRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "baseline" },
     shelfLink: { ...type.label, color: c.inkMuted },
-    chips: { flexDirection: "row", flexWrap: "wrap", gap: space.sm, marginTop: space.md },
+    // Symmetric. It previously had 19pt above (the eyebrow's margin plus its
+    // own) and 0 below, so the heading sat flush against it and the row looked
+    // shunted upward. Canvas margins: 14 above, 18 below.
+    chips: {
+      flexDirection: "row", flexWrap: "wrap", gap: space.sm,
+      marginTop: 14, marginBottom: 18,
+    },
     chip: {
       flexDirection: "row", alignItems: "center", columnGap: 6,
       borderWidth: hairline, borderColor: c.rule, backgroundColor: c.surface,
@@ -1142,6 +1255,13 @@ const build = ({ colours: c, space, radius, hairline }: Theme) =>
     btnPressed: { opacity: 0.7 },
     btnWide: { paddingHorizontal: 0, marginTop: 0, paddingVertical: 13 },
     floatWrap: { position: "absolute", left: 0, right: 0, alignItems: "center" },
+    fadeWrap: {
+      position: "absolute", left: 0, right: 0, bottom: 0,
+      flexDirection: "column",
+    },
+    // Each band is an equal slice of the wrapper; the last one is solid, so
+    // nothing shows through the gesture area at the very bottom.
+    fadeBand: { flex: 1, backgroundColor: c.ground },
     float: {
       backgroundColor: c.brass,
       borderRadius: radius.pill,
@@ -1173,11 +1293,3 @@ const build = ({ colours: c, space, radius, hairline }: Theme) =>
     btnLabel: { ...type.button, color: c.brassInk, textAlign: "center" },
   });
 
-const bare = StyleSheet.create({
-  blank: { flex: 1, backgroundColor: palettes.dark.ground },
-  centre: {
-    flex: 1, alignItems: "center", justifyContent: "center",
-    padding: 24, backgroundColor: palettes.dark.ground,
-  },
-  text: { color: palettes.dark.ink, fontSize: 15 },
-});

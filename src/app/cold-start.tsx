@@ -10,8 +10,8 @@ import { tuning } from "@/config/tuning";
 import { markColdStartSkipped } from "@/lib/coldStart";
 import { catalogSeed } from "@/lib/seed";
 import { ensureSession, supabase } from "@/lib/supabase";
-import { palettes, ThemeProvider, useTheme, type Theme, type ThemeName } from "@/theme/tokens";
-import { type, useAppFonts } from "@/theme/type";
+import { useTheme, type Theme, type ThemeName } from "@/theme/tokens";
+import { type } from "@/theme/type";
 
 /**
  * Cold start (design spec §8).
@@ -34,22 +34,7 @@ import { type, useAppFonts } from "@/theme/type";
 interface CuisineRow { slug: string; label: string }
 
 export default function ColdStart() {
-  const [fontsLoaded, fontError] = useAppFonts();
-
-  if (fontError) {
-    return (
-      <View style={bare.centre}>
-        <Text style={bare.text}>Fonts failed to load: {fontError.message}</Text>
-      </View>
-    );
-  }
-  if (!fontsLoaded) return <View style={bare.blank} />;
-
-  return (
-    <ThemeProvider>
-      <ColdStartBody />
-    </ThemeProvider>
-  );
+  return <ColdStartBody />;
 }
 
 function ColdStartBody() {
@@ -314,11 +299,3 @@ const build = ({ colours: c, space, radius, hairline }: Theme) =>
     error: { ...type.caution, color: c.oxblood, textAlign: "center" },
   });
 
-const bare = StyleSheet.create({
-  blank: { flex: 1, backgroundColor: palettes.dark.ground },
-  centre: {
-    flex: 1, alignItems: "center", justifyContent: "center",
-    padding: 24, backgroundColor: palettes.dark.ground,
-  },
-  text: { color: palettes.dark.ink, fontSize: 15 },
-});

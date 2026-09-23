@@ -2,7 +2,7 @@
   "expo": {
     "name": "Elsewhere",
     "slug": "elsewhere",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "elsewhere",
@@ -10,7 +10,8 @@
     "ios": {
       "icon": "./assets/expo.icon",
       "infoPlist": {
-        "NSLocationWhenInUseUsageDescription": "Elsewhere uses your location to find places to eat near you. Your location is never shared with anyone."
+        "NSLocationWhenInUseUsageDescription": "Elsewhere uses your location to find places to eat near you. Your location is never shared with anyone.",
+        "ITSAppUsesNonExemptEncryption": false
       },
       "bundleIdentifier": "app.goelsewhere.elsewhere"
     },

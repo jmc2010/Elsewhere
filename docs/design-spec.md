@@ -387,6 +387,32 @@ ghost-kitchen clusters. Run it in the ingest.
 - "Somewhere I'm heading" stays — searching a town before you arrive is a
   decision-engine feature map-first competitors do badly.
 
+### Choosing a town asks what you're after
+
+Picking a TOWN opens the filter sheet immediately after, headed "What are you
+after in Gainesville?" with "Anything" as the way past it.
+
+The reasoning, because §13 otherwise treats the two sheets as independent and
+someone will later read this coupling as a bug: **a travel decision almost
+always arrives with an intent already attached.** "We're driving to
+Gainesville" is usually "...for barbecue". Dropping someone on a list and
+making them find the filter chip to say the thing they already had in mind is
+an extra step at exactly the moment they are most decided.
+
+The coupling is one-directional and conditional:
+
+- Only for a **town**. "Where I am" is the default state and carries no such
+  intent; re-asking somebody who has not chosen to travel is noise.
+- Only when **no filter is set**. Re-asking somebody who has already answered
+  is the opposite of helpful.
+- The filter sheet remains independently reachable from its own chip, as §13
+  describes. Nothing about the chain removes that.
+
+The wording changes with the context, and that is not decoration: "Narrow it
+down" and "Cancel" are both wrong in a sheet the user did not open. Nothing
+has been narrowed yet, and there is nothing to cancel because the town is
+already chosen.
+
 ### What — the filter sheet
 
 - **Show only cuisine groups present, each with its count.** Fifteen groups in a

@@ -143,25 +143,25 @@ export function PlaceCard({
   // Collect only the meta elements that exist. An absent element contributes
   // nothing at all -- no slot, no separator, no reserved width.
   const metaParts: ReactNode[] = [];
-  if (meta?.cuisine) metaParts.push(<CardText style={s.meta}>{meta.cuisine}</CardText>);
-  if (meta?.locality) metaParts.push(<CardText style={s.meta}>{meta.locality}</CardText>);
+  if (meta?.cuisine) metaParts.push(<CardText style={s.meta} numberOfLines={1}>{meta.cuisine}</CardText>);
+  if (meta?.locality) metaParts.push(<CardText style={s.meta} numberOfLines={1}>{meta.locality}</CardText>);
   if (meta?.distanceMiles != null) {
     metaParts.push(
-      <CardText style={[s.meta, tabular]}>{formatMiles(meta.distanceMiles)}</CardText>,
+      <CardText style={[s.meta, tabular]} numberOfLines={1}>{formatMiles(meta.distanceMiles)}</CardText>,
     );
   }
   if (meta?.rating != null) {
     // Star and numeral share one Text so they can never wrap apart. The star's
     // trailing gap is baked into its advance width, not added here.
     metaParts.push(
-      <CardText style={[s.meta, tabular]}>
+      <CardText style={[s.meta, tabular]} numberOfLines={1}>
         {STAR}
         {meta.rating.toFixed(1)}
       </CardText>,
     );
   }
-  if (meta?.priceLevel) metaParts.push(<CardText style={s.meta}>{meta.priceLevel}</CardText>);
-  if (meta?.closedNow) metaParts.push(<CardText style={s.shut}>Closed now</CardText>);
+  if (meta?.priceLevel) metaParts.push(<CardText style={s.meta} numberOfLines={1}>{meta.priceLevel}</CardText>);
+  if (meta?.closedNow) metaParts.push(<CardText style={s.shut} numberOfLines={1}>Closed now</CardText>);
 
   return (
     <Pressable

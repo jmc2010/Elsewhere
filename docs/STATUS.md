@@ -360,6 +360,28 @@ misread as a reshuffling bug. **When reading google_api_usage, count distinct
 `app-` session ids first**: a new session id means a new process, not a new
 fault.
 
+### Channel policy: stop mirroring
+
+Two channels, and they are NOT kept in step.
+
+- **`preview`** — the working channel. Your own devices only. Push as often as
+  it is useful; nobody else sees it.
+- **`production`** — TestFlight. Pushed only on a deliberate call, and only
+  when all three hold:
+  1. the chunk is **complete**,
+  2. it has been **seen and approved**,
+  3. you can state **in one line** what changed since the last production
+     push.
+
+**Never push `production` mid-chunk.** Tester attention is spent once. Noisy
+builds produce noisy review data, and review data is the only reason testers
+exist at this stage — a tester who has seen four half-finished states cannot
+tell you which one felt wrong.
+
+This is worth writing down because the default drifts the other way: while
+both channels were empty it was simpler to mirror, and mirroring is what
+happened for the first evening. It should not continue.
+
 ### Known gaps, carried forward deliberately
 
 - **A raw error message can still reach a user.** Place detail renders the

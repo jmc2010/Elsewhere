@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -59,12 +59,26 @@ export interface FilterSheetProps {
   groups: CuisineGroup[];
   moods: MoodTag[];
   initial: Filters;
+  /**
+   * Shown when the sheet follows a town choice rather than being opened
+   * deliberately. In that moment "Narrow it down" and "Cancel" are the wrong
+   * words -- nothing has been narrowed yet, and there is nothing to cancel
+   * because the town is already chosen.
+   */
+  askingIntentFor?: string | null;
   /** Called once, on dismissal, with the final state. */
   onCommit: (next: Filters) => void;
   onCancel: () => void;
 }
 
-export function FilterSheet({ groups, moods, initial, onCommit, onCancel }: FilterSheetProps) {
+export function FilterSheet({
+  groups,
+  moods,
+  initial,
+  askingIntentFor,
+  onCommit,
+  onCancel,
+}: FilterSheetProps) {
   const theme = useTheme();
   const s = styles(theme);
   const insets = useSafeAreaInsets();
@@ -74,6 +88,37 @@ export function FilterSheet({ groups, moods, initial, onCommit, onCancel }: Filt
   // behind it can reflow.
   const [draft, setDraft] = useState<Filters>(initial);
 
+  /**
+   * Every group present, PLUS any that is currently selected but no longer
+   * present, shown with a count of 0.
+   *
+   * §6 says show only the groups actually present, and that is right -- but
+   * taken literally it builds a trap. Filter to Barbecue in Carrollton, move
+   * the search back home where there is no barbecue, and the Barbecue pill
+   * vanishes from the sheet because its count is zero. The filter is still
+   * applied, the shortlist is empty, and there is no control anywhere that
+   * can turn it off. The only escape is reinstalling the app.
+   *
+   * A filter you cannot see is one thing. A filter you cannot REMOVE is a
+   * dead end, so an active selection always keeps its pill.
+   */
+  const shownGroups = useMemo(() => {
+    const present = new Set(groups.map((g) => g.slug));
+    const orphans = draft.cuisines
+      .filter((slug) => !present.has(slug))
+      .map((slug) => ({
+        slug,
+        // The label is gone with the count, so fall back to the slug
+        // humanised. Ugly, but visible and tappable beats correct and absent.
+        label: slug.split("-").map((w) => w[0].toUpperCase() + w.slice(1)).join(" "),
+        place_count: 0,
+      }));
+    return [...groups, ...orphans];
+  }, [groups, draft.cuisines]);
+
+  const activeCount =
+    draft.cuisines.length + draft.moodTags.length + (draft.openNow ? 1 : 0);
+
   const toggleIn = useCallback((list: string[], value: string) => {
     return list.includes(value) ? list.filter((v) => v !== value) : [...list, value];
   }, []);
@@ -82,18 +127,31 @@ export function FilterSheet({ groups, moods, initial, onCommit, onCancel }: Filt
     <View style={[s.screen, { paddingTop: insets.top }]}>
       <View style={s.grip} />
       <View style={s.head}>
-        <Text style={s.title}>Narrow it down</Text>
-        <Pressable onPress={onCancel} accessibilityRole="button" hitSlop={12}>
-          <Text style={s.quiet}>Cancel</Text>
-        </Pressable>
+        <Text style={s.title}>
+          {askingIntentFor ? `What are you after in ${askingIntentFor}?` : "Narrow it down"}
+        </Text>
+        <View style={s.headActions}>
+          {activeCount > 0 ? (
+            <Pressable
+              onPress={() => setDraft(DEFAULT_FILTERS)}
+              accessibilityRole="button"
+              hitSlop={12}
+            >
+              <Text style={s.clear}>Clear all</Text>
+            </Pressable>
+          ) : null}
+          <Pressable onPress={onCancel} accessibilityRole="button" hitSlop={12}>
+            <Text style={s.quiet}>{askingIntentFor ? "Anything" : "Cancel"}</Text>
+          </Pressable>
+        </View>
       </View>
 
       <ScrollView contentContainerStyle={s.body}>
-        {groups.length > 0 ? (
+        {shownGroups.length > 0 ? (
           <View style={s.group}>
             <Text style={s.lab}>What sort of thing</Text>
             <View style={s.pills}>
-              {groups.map((g) => {
+              {shownGroups.map((g) => {
                 const on = draft.cuisines.includes(g.slug);
                 return (
                   <Pressable
@@ -190,6 +248,8 @@ const build = ({ colours: c, space, radius, hairline }: Theme) =>
     },
     title: { ...type.sheetHead, color: c.ink },
     quiet: { ...type.meta, color: c.inkMuted },
+    headActions: { flexDirection: "row", columnGap: space.lg, alignItems: "center" },
+    clear: { ...type.meta, color: c.brass },
     body: { paddingHorizontal: 18, paddingBottom: space.xl },
     group: { marginBottom: space.xl },
     lab: { ...type.label, color: c.inkFaint, marginBottom: 9 },
