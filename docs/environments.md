@@ -151,6 +151,23 @@ export DOCKER_HOST="unix://$HOME/.docker/run/docker.sock"
 export PATH="/Applications/Docker.app/Contents/Resources/bin:$PATH"
 ```
 
+### Device-to-local verified, 2026-09-23
+
+A physical iPhone reached the Mac's local Supabase over the LAN
+(`http://192.168.1.230:54321/auth/v1/health` returned GoTrue's version).
+No firewall prompt, no wifi-band problem — the two failure modes worth
+expecting.
+
+Note that the API root returns `{"message":"no Route matched with those
+values"}`. That is **Kong answering**, not a failure: `/` is not a route, and
+seeing that message means the connection succeeded. Use `/auth/v1/health` to
+check, or Studio on port **54323** for a UI over the local data.
+
+What this does NOT do is redirect an installed build. `EXPO_PUBLIC_*` values
+are inlined at bundle time, so pointing a phone at local means running
+`expo start` with `.env.local` edited to the LAN address and loading that
+bundle. Browsing to the URL proves the network; it does not move the app.
+
 ### Verified from scratch, 2026-09-23
 
 All **55 migrations applied clean in sequence** against an empty database,

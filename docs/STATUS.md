@@ -237,150 +237,42 @@ Three bugs found by measuring rather than reading, all worth remembering:
 
 ## Next
 
-**Build the cold-start recognition grid and the shortlist screen as one
-chunk, grid first.** This is deliberate ordering, not preference.
+**Use it for a week. Then decide from what annoys you, not from the spec.**
 
-With zero rows in `place_verdicts` the shortlist has nothing in Layer 3 to
-rank on, so it falls back to sorting by distance — and spec §3 is explicit
-that distance is a gate, never a sort key. Twelve Valley View places span 0.2
-miles; ten Dallas places sit at 0.0. If the shortlist ships ordering by
-distance, that becomes the baseline everything is compared against and it
-never gets fixed.
+Everything the spec described for phase 2 is built and shipped. The app runs
+on both phones and in TestFlight; the cost model is measured rather than
+estimated; the environment shape is settled and both of its unverified paths
+have been verified. There is no obvious next build, and that is the point:
+the next instruction should come from real use.
 
-The recognition grid (§8) needs only name, cuisine and distance — all of
-which `catalog_search` already returns — so it can be built first. Six taps
-writes six `known` verdicts, and the shortlist then has a real visited set on
-its first ever render.
+What real use will produce, and roughly what it costs to act on:
 
-In order:
+- **Ranking.** Today the shortlist is novelty-first with a deterministic
+  tiebreak. It is explicitly NOT §3's ranking, which needs tag affinity,
+  friend verdicts and confidence weights. Those need verdicts to exist, which
+  needs the review prompt to have fired a few dozen times. A week of dinners
+  is the input.
+- **The 5% sample in dense areas.** The pool is 200 of downtown Dallas's
+  3,982. Seeded rotation makes 2,560 reachable across a month, so it is a
+  rotation problem rather than an exclusion one — but the fix is moving
+  ranking into `catalog_search` with the §15 thresholds in a tuning table.
+  Worth doing when Dallas use is real, not before.
+- **The §15 knobs.** Every one is a guess. Recency windows, novelty ratio,
+  reroll pool, the 6-hour prompt delay, the 20-call tier cap. None should be
+  touched until there is behaviour to tune against.
 
-1. **`catalog_search` returns `display_name`, `phone`, `update_time`.** The
-   gate: the data landed in the catalog on 2026-09-22 but nothing surfaces it.
-2. **Cold-start grid (§8).** "Which of these do you already know?" Every tap
-   writes `verdict = 'known'`.
-3. **Shortlist screen**, rebuilt with `PlaceCard` and the theme. Removes
-   `src/app/index.tsx` from `LEGACY_PRE_DESIGN` in
-   `scripts/check-no-colour-literals.py`.
-4. **Rural-exhausted state, built with the shortlist, not after it.** In
-   Valley View with 25 places "you've been to all four" is Tuesday, not an
-   edge case, and after six grid taps it is reachable immediately. It is also
-   the screen that demonstrates the product.
-5. **Review capture (§4)** after that. Until it exists nothing ever writes a
-   verdict other than `known`, and the twenty seeded tags stay unused.
+### Things that will need doing before anyone external is invited
 
-**Expected sparseness is not a bug and must not be papered over.** The
-shortlist will render fewer card states than the harness does: frontier and
-stale ticks work (`update_time` is real), `Call ahead` works (phone is real),
-but reason lines are Layer 3 and there is almost nothing there yet. If a card
-has no honest reason, omit the line. Never substitute distance or a rating as
-filler.
+Not now, but do not let them surprise you:
 
-### The name-cleaning rule is FROZEN. This is a decision, not an omission.
-
-`derive_display_name` is finished. Do not extend it.
-
-Where it got to: 97 rows changed on the last substantive pass, then 1 on the
-one after. The marginal return on further regex is now below the risk that the
-next refinement breaks something already working — which has happened twice
-already. The one-sided dash allowance fixed "Chicken- Irving TX" and broke
-"Estrada's TEX- MEX"; the both-sides fix repaired that and silently reverted
-every correct colon cut.
-
-The accepted residue, recorded so nobody re-opens it as a bug:
-
-- `SPICY AROMA- Indian cuisine` stays uncleaned. Ugly and readable beats
-  mangled: `Estrada's TEX` was wrong, and the card handles long names with
-  two lines and an ellipsis already.
-- `Howard Wang's To Go -trinity Grove, West Dallas` likewise.
-- `Restaurant Designs Inc` stays visible, because hiding it would have hidden
-  three real bakeries.
-
-**Residue goes to user correction, not to more regex.** Spec §5's "It's called
-something else now" is the mechanism, it repairs the row permanently, and it
-is the highest-value contribution a user can make. A rule that gets a name 95%
-right and a correction path for the rest beats a rule chasing 99%.
-
-If a refinement is proposed in future, the answer is no unless it comes with
-a measured before/after over the whole catalog AND names the rows it breaks.
-
-### Open licensing question: caching Google responses in memory
-
-Place detail calls the Atmosphere SKU, and it fires on every open — so
-tapping between two places would charge for the same place twice. The
-response is now held in the TanStack query cache for the life of a foreground
-session and dropped when the app backgrounds (`src/app/_layout.tsx`).
-
-**This is flagged rather than settled.** The Google Maps Platform Terms permit
-caching `place_id` indefinitely and very little else. Holding a response in
-memory for minutes inside one screen session reads as request scope rather
-than storage — no persister is configured, nothing reaches disk, and it is
-gone on background — but that is a reading, not a ruling. Worth checking
-against the current terms before the user base is larger than one.
-
-What it is NOT: nothing Google returns is written to the database. The
-mechanical guard in `scripts/check-no-google-persistence.py` still holds and
-still passes.
-
-**Cost note, measured from the code rather than assumed:** a detail open on an
-already-resolved place costs 1 call; on an unresolved one it costs 2
-(searchText + details). Only 76 of 39,304 places are resolved, so almost every
-detail open currently costs 2. Both are budgeted against
-`places.details.enterprise_atmosphere` even though one is really a Text
-Search, which over-reports Atmosphere and under-reports searchText. Worth
-fixing if SKU-level cost attribution ever matters.
-
-Detail calls carry a `detail-` session id, so the real number is a query:
-
-```sql
-select sum(call_count) from google_api_usage where session_id like 'detail-%';
-```
-
-### The measured cost model, end to end
-
-Measured on device 2026-09-22, in a single uninterrupted session with the
-per-call SKU attribution in place:
-
-| Action | Google calls |
-|---|---|
-| Cold open — shortlist, 5 cards needing live data | **5** |
-| `You pick.` -> reroll -> back | **0** |
-| Open a place detail | **1** Atmosphere (2 if the place is unresolved) |
-| Re-open the same place | **0** |
-| Realistic session: open + two details + reveal + commit | **~7** |
-
-At the 60/day default that is roughly **8 full sessions** before a user is
-degraded, and degradation is graceful: names, distances, their own notes and
-their friends' all keep working.
-
-**A cold open costs 5 calls and that is correct**, not a leak. New process,
-empty per-place hydration cache, five cards that need live data. A run of
-force-restarts therefore looks exactly like a runaway loop in the usage log —
-three restarts five seconds apart produced 15 calls and were initially
-misread as a reshuffling bug. **When reading google_api_usage, count distinct
-`app-` session ids first**: a new session id means a new process, not a new
-fault.
-
-### Channel policy: stop mirroring
-
-Two channels, and they are NOT kept in step.
-
-- **`preview`** — the working channel. Your own devices only. Push as often as
-  it is useful; nobody else sees it.
-- **`production`** — TestFlight. Pushed only on a deliberate call, and only
-  when all three hold:
-  1. the chunk is **complete**,
-  2. it has been **seen and approved**,
-  3. you can state **in one line** what changed since the last production
-     push.
-
-**Never push `production` mid-chunk.** Tester attention is spent once. Noisy
-builds produce noisy review data, and review data is the only reason testers
-exist at this stage — a tester who has seen four half-finished states cannot
-tell you which one felt wrong.
-
-This is worth writing down because the default drifts the other way: while
-both channels were empty it was simpler to mirror, and mirroring is what
-happened for the first evening. It should not continue.
+1. **The raw error string** on place detail must not ship to a stranger. It
+   is deliberate as a dev diagnostic and logged as pre-launch.
+2. **Account litter** — thirteen anonymous accounts with no verdicts and no
+   lock-ins, artifacts of setup. See the hygiene note below.
+3. **App Privacy answers and a privacy policy URL.** Required before external
+   TestFlight review or the store. Location and a deferred account both need
+   declaring properly.
+4. **Beta App Review** for external testers. Internal testers skip it.
 
 ### A null that resolves itself beats a guess that persists
 
