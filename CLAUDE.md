@@ -29,7 +29,7 @@ Mechanical guards, so this doesn't rely on memory:
 
 - The `places` table has **no columns** for rating, review text, price level, or
   hours. Adding one is a schema error, not a code-review finding.
-- `scripts/check-no-google-persistence.sh` fails CI if a migration introduces
+- `scripts/check-no-google-persistence.py` fails CI if a migration introduces
   one. Do not weaken it to make a migration pass.
 - Google-derived values are returned from `places-proxy` in a response envelope
   that has no database writer. Keep it that way.
@@ -108,6 +108,40 @@ a downtown Dallas slice, ~1,470 rows. Regenerate with
 `scripts/dev/generate_seed.sh`. Density is what the screens branch on, so
 three density regimes is what development needs; 39k rows would only be
 slower to reset.
+
+## Never run `supabase db push` against this project
+
+The cloud database **has no migration history**. `supabase_migrations` does not
+exist as a schema; every migration reached cloud by being applied directly,
+and the CLI has no record of any of it.
+
+So `supabase migration list` reports all 56 migrations as unapplied on remote,
+which is not a bug to fix but a fact to work around, and **`supabase db push`
+would try to replay all of them from `0001` against a live database holding
+39,304 places and every verdict anyone has recorded.** `0001` is the init
+migration. That is the unrecoverable case the local-first rule exists to
+prevent, reached by the one command that sounds like the safe way to do it.
+
+The actual procedure, and it has not changed:
+
+```bash
+supabase db reset                                    # local, from scratch. Always first.
+psql "$(cat ~/.elsewhere-db-url)" -v ON_ERROR_STOP=1 \
+     -f supabase/migrations/<the one new file>.sql   # cloud, one file, explicitly
+```
+
+`ON_ERROR_STOP=1` is not optional: without it psql continues past a failed
+statement and commits a half-applied migration. Every migration file is wrapped
+in `begin`/`commit`, so with it, a failure rolls back cleanly.
+
+Two things that follow:
+
+- **Apply the migration BEFORE shipping the JS that needs it.** New parameters
+  get defaults, so the deployed app keeps working against the new function;
+  the reverse is not true, and the old app would break the moment the new
+  column is missing.
+- Adopting CLI migration history later means back-filling `schema_migrations`
+  with all 56 rows, not running `db push`. Nobody should attempt that casually.
 
 ## Before stopping: rewrite the Next section
 

@@ -97,6 +97,8 @@ interface LocalityRow {
   lat: number;
   lon: number;
   place_count: number;
+  /** How many of `place_count` survive the active cuisine filter. */
+  match_count: number;
   distance_meters: number;
 }
 
@@ -337,7 +339,11 @@ function Shortlist() {
   // Only asked for when the town is exhausted, so the ordinary path never
   // pays for it. Free either way -- Layer 1, no Google call.
   const towns = useQuery({
-    queryKey: ["catalog_localities", coords?.lat, coords?.lon],
+    // filters.cuisines is IN THE KEY, which is what makes the counts update
+    // when the filter changes rather than an hour later. Without it the
+    // one-hour staleTime below would serve the previous filter's numbers --
+    // the counts were unfiltered AND stale, two faults wearing one coat.
+    queryKey: ["catalog_localities", coords?.lat, coords?.lon, filters.cuisines],
     enabled: coords !== null,
     staleTime: 60 * 60 * 1000,
     queryFn: async (): Promise<LocalityRow[]> => {
@@ -348,6 +354,9 @@ function Shortlist() {
         // name, and "somewhere I'm heading" is meaningless if the list stops
         // at 25 miles. It is one free Layer 1 query, cached for an hour.
         p_limit: 500,
+        // Same convention as catalog_search: null means "no filter", and an
+        // empty array would raise rather than mean everything.
+        p_cuisines: filters.cuisines.length > 0 ? filters.cuisines : null,
       });
       if (error) throw error;
       return (data ?? []) as LocalityRow[];
@@ -743,6 +752,7 @@ function Shortlist() {
         towns={(towns.data ?? []) as Town[]}
         origin={origin}
         radiusMiles={radiusMiles}
+        filterActive={filters.cuisines.length > 0}
         localCount={pool.length}
         onCancel={() => setSheet("none")}
         onPick={(next, miles) => {

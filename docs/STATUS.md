@@ -237,7 +237,30 @@ Three bugs found by measuring rather than reading, all worth remembering:
 
 ## Next
 
-**Verify the two changes the week produced, on device, then re-measure cost.**
+**Verify the town counts on device, then re-measure cost.**
+
+Migration 0056 is applied to local AND cloud, and the OTA is published. Cloud
+was applied with psql, one file, NOT `supabase db push` -- see the new CLAUDE.md
+section. That discovery is the important part of this session:
+
+  - The cloud database has no `supabase_migrations` schema at all. Every
+    migration got there by hand, so the CLI thinks none of the 56 are applied.
+  - `supabase db push` would therefore replay from 0001 against a live
+    database holding 39,304 places and 19 verdicts. It was nearly run. Do not.
+
+Verified on cloud after applying:
+  - signature now (p_lat, p_lon, p_limit, p_cuisines)
+  - Valley View 19->1, Sanger 53->2, Gainesville 161->13, Lindsay 6->0,
+    Pilot Point 49->7, Tioga 12->0  (filtered to mexican)
+  - the OLD 3-arg call still resolves, so the previously deployed app did not
+    break in the window before the OTA landed
+
+Verified locally, from scratch (all 56 migrations + seed):
+  - unfiltered: match_count == place_count
+  - mexican: Gainesville 154 -> 11, Valley View 16 -> 1, Dallas 1262 -> 69
+  - no town disappears when filtered (same row count either way)
+  - group slugs expand: asian 7 >= its leaf chinese 3
+  - an unknown slug raises rather than silently returning everything
 
 The week happened and produced two things, both built on 2026-09-24 and neither
 yet seen on a phone:

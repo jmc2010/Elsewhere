@@ -34,6 +34,8 @@ export interface Town {
   lat: number;
   lon: number;
   place_count: number;
+  /** How many of `place_count` survive the active cuisine filter. */
+  match_count: number;
   distance_meters: number;
 }
 
@@ -45,6 +47,14 @@ export interface LocationPickerProps {
   towns: Town[];
   origin: Origin;
   radiusMiles: number;
+  /**
+   * Whether a cuisine filter is active.
+   *
+   * Passed rather than inferred from `match_count !== place_count`: a filter
+   * that happens to match everything in a town would look inactive, and the
+   * count would silently stop saying "of".
+   */
+  filterActive: boolean;
   /** How many places are within reach right now. Decides the control's shape. */
   localCount: number;
   onPick: (origin: Origin, radiusMiles: number) => void;
@@ -63,6 +73,7 @@ export function LocationPicker({
   towns,
   origin,
   radiusMiles,
+  filterActive,
   localCount,
   onPick,
   onCancel,
@@ -92,10 +103,13 @@ export function LocationPicker({
       // When searching, the nearest match is rarely the point -- somebody
       // typing "Denton" wants Denton. Rank by how early the match lands, then
       // by how many places are there.
+      // Tie-break on the number being SHOWN. Ranking by the total while
+      // displaying matches would put a town with 200 places and no barbecue
+      // above one with 12 barbecue places, which is the opposite of useful.
       .sort((a, b) =>
         a.locality.toLowerCase().indexOf(q) - b.locality.toLowerCase().indexOf(q) ||
-        b.place_count - a.place_count);
-  }, [towns, query]);
+        (filterActive ? b.match_count - a.match_count : b.place_count - a.place_count));
+  }, [towns, query, filterActive]);
 
   // The shape switch. Below the threshold the town list is the useful
   // control; above it, miles are.
@@ -194,8 +208,28 @@ export function LocationPicker({
                     </Text>
                   </View>
                   {/* The real catalog count, not an estimate. It is the whole
-                      reason this list beats a distance dial rurally. */}
-                  <Text style={[s.townCount, tabular]}>{t.place_count}</Text>
+                      reason this list beats a distance dial rurally.
+
+                      With a filter on it reads "11 of 157": the match count
+                      answers "how much choice will I have there", the total is
+                      what separates a real town from a mis-filed address. A
+                      town with no matches shows "0 of 157" rather than
+                      vanishing -- a list that shrinks as you filter reads as
+                      broken, and 0 is the honest answer. */}
+                  {/* No special styling for a zero. `townCount` is already
+                      the most muted ink there is, and §11 forbids state
+                      carried by colour alone -- "0 of 157" says it in words,
+                      which is the stronger signal anyway. */}
+                  <Text
+                    style={[s.townCount, tabular]}
+                    accessibilityLabel={
+                      filterActive
+                        ? `${t.match_count} matching of ${t.place_count} places`
+                        : `${t.place_count} places`
+                    }
+                  >
+                    {filterActive ? `${t.match_count} of ${t.place_count}` : t.place_count}
+                  </Text>
                 </Pressable>
               );
             })}

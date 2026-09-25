@@ -382,6 +382,13 @@ ghost-kitchen clusters. Run it in the ingest.
   real catalog counts (Valley View 25, Sanger 41, Gainesville 166, Denton 612,
   Muenster 14). Rurally, distance is a cliff — 5 miles is a handful, 10 miles is
   a whole other town — so the town is the unit of choice.
+- **The count obeys the filter.** With a cuisine selected the row reads
+  `11 of 154` — matches first, total second. It previously showed the total
+  only, which meant "Gainesville · 154" could invite a drive to a town with
+  eleven options, or with Barbecue selected, none. A count on a button is a
+  promise; it has to be the count you will actually get. Towns with no matches
+  show `0 of 154` rather than disappearing, and the search ranking tie-breaks
+  on the number being *shown*, not the total.
 - **High density**: reverts to miles, because downtown density really is
   continuous.
 - "Somewhere I'm heading" stays — searching a town before you arrive is a
