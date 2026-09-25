@@ -387,6 +387,25 @@ ghost-kitchen clusters. Run it in the ingest.
 - "Somewhere I'm heading" stays — searching a town before you arrive is a
   decision-engine feature map-first competitors do badly.
 
+**Correction, 2026-09-24.** "Low density replaces miles with a town list" was
+implemented as *low density hides the mile control*, and that was wrong. The
+town list is the right primary unit rurally, but it is not a substitute for the
+radius, because rurally the radius is what decides **which towns are on the
+list at all** — from Valley View, 5 miles offers 2 towns and 15 offers 6. The
+control was therefore missing in precisely the place it mattered most, and the
+gate was doubly wrong because `dense` is `pool.length >= 200` while `poolLimit`
+is also 200, so it only ever meant "the pool was truncated".
+
+`How far` now renders at every density. Miles and towns are complementary, not
+alternatives: miles set the horizon, towns pick a destination inside it. What
+remains density-dependent is emphasis — the town list still leads rurally, and
+the copy still changes ("Somewhere I'm heading" vs "Or somewhere I'm heading").
+
+The offered radii are `[2, 5, 10, 15]`, the default is 10, and the choice is
+**remembered per device**. It was previously component state and reset on every
+cold open; a control nobody could reach made that invisible, and a control
+everybody can reach makes it a bug.
+
 ### Choosing a town asks what you're after
 
 Picking a TOWN opens the filter sheet immediately after, headed "What are you
@@ -469,6 +488,21 @@ already chosen.
 - Place detail puts *yours* first, then *your people*, then Google's block
   visually separated — which is both the obligation and an honest signal about
   whose opinion is whose.
+
+**The reviewer avatar is the floor, not the trimming.** Google's policy is
+explicit that *if space is limited, the minimum requirement is to display the
+author's avatar* — so the avatar is the last thing to cut, not the first. A
+future tidy-up of the detail screen that drops avatars to save space or to
+avoid naming Google on the privacy form is a licence violation, and was ruled
+out on 2026-09-23 for exactly that reason.
+
+It follows that the avatar is fetched **by the device, directly from Google's
+CDN**, and stays that way. Proxying it through `places-proxy` is not an option:
+Google prohibits pre-fetching and caching their content, so a caching proxy
+breaks the licence and a non-caching one pays bandwidth per render for nothing.
+This is the app's only direct device-to-third-party call; it is disclosed in
+the privacy statement rather than engineered away. See
+[`privacy-data-flows.md`](privacy-data-flows.md).
 
 ---
 
@@ -682,6 +716,26 @@ The order is the whole point:
 
 You see the cost before you see the reward. That is what makes three rerolls
 feel scarce rather than metered.
+
+### Going back (added 2026-09-24, from a week of use)
+
+*"Letting you pick and me saying next shouldn't make you drop that pick. I
+should be able to swipe back through them."*
+
+Swipe right, or `The one before`, returns to a place already seen. Motion is
+the exact inverse of a reroll — dismissed *downward*, new name entering from
+*above* — because going back must not look like going forward.
+
+**A reroll is spent by reaching somewhere new, not by moving.** Walking back
+and forth through what you have already seen costs nothing and the pips do not
+move. Going back is never refused, including once all three rerolls are spent,
+which is the trap this fixes: three spent, wanting the second one back, no way
+to reach it.
+
+This does not weaken the cap. You still only ever meet four places — `drawFromTop`
+is unchanged. You are simply no longer punished for looking at them in order,
+and the scarcity the section above describes was never doing that work; the cap
+was.
 
 ### Commit
 

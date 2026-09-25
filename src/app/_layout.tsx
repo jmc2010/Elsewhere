@@ -3,6 +3,7 @@ import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { AppState, StyleSheet, Text, View } from "react-native";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import { EnvironmentBadge } from "@/components/EnvironmentBadge";
@@ -104,22 +105,39 @@ export default function RootLayout() {
   }
 
   return (
-    <QueryClientProvider client={client}>
-      <ThemeControlContext.Provider value={{ preference, setPreference }}>
-        <ThemeProvider preference={preference}>
-          <SafeAreaProvider>
-            <StatusBar style={preference === "light" ? "dark" : "auto"} />
-            <Stack screenOptions={{ headerShown: false }} />
-            {/* Above every screen, never in production. See the component. */}
-            <EnvironmentBadge />
-          </SafeAreaProvider>
-        </ThemeProvider>
-      </ThemeControlContext.Provider>
-    </QueryClientProvider>
+    /**
+     * GestureHandlerRootView must be the OUTERMOST view or every gesture in
+     * the app silently does nothing.
+     *
+     * Not a theoretical risk -- it is the same failure as the missing
+     * babel.config.js: no error, no warning, the handler simply never fires,
+     * and it looks like a logic bug for an hour. Nothing used a gesture until
+     * the reveal's back-swipe (2026-09-24), so its absence cost nothing and
+     * was invisible. Anything gestural added later depends on this line.
+     *
+     * react-native-gesture-handler is already a dependency and already
+     * autolinked into the existing binaries, so this is OTA-safe -- it needs
+     * no rebuild.
+     */
+    <GestureHandlerRootView style={bare.root}>
+      <QueryClientProvider client={client}>
+        <ThemeControlContext.Provider value={{ preference, setPreference }}>
+          <ThemeProvider preference={preference}>
+            <SafeAreaProvider>
+              <StatusBar style={preference === "light" ? "dark" : "auto"} />
+              <Stack screenOptions={{ headerShown: false }} />
+              {/* Above every screen, never in production. See the component. */}
+              <EnvironmentBadge />
+            </SafeAreaProvider>
+          </ThemeProvider>
+        </ThemeControlContext.Provider>
+      </QueryClientProvider>
+    </GestureHandlerRootView>
   );
 }
 
 const bare = StyleSheet.create({
+  root: { flex: 1 },
   blank: { flex: 1, backgroundColor: palettes.dark.ground },
   centre: {
     flex: 1, alignItems: "center", justifyContent: "center",

@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Linking, Platform, Pressable, StyleSheet, Text, View } from "react-native";
+import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, {
   Easing,
+  runOnJS,
   useAnimatedStyle,
   useReducedMotion,
   useSharedValue,
@@ -43,6 +45,34 @@ import { tabular, type } from "@/theme/type";
  * You see the cost before you see the reward. Reversed, it reads as a reward
  * with a price attached, which is a slot machine. Nothing here exceeds the
  * 600ms budget, and reduced motion collapses all of it to a 120ms crossfade.
+ *
+ * ----------------------------------------------------------------------------
+ * GOING BACK (added 2026-09-24, from a week of use)
+ * ----------------------------------------------------------------------------
+ * "Letting you pick and me saying next shouldn't make you drop that pick. I
+ * should be able to swipe back through them."
+ *
+ * Correct, and it was never a budget question -- every member of `sequence` is
+ * already hydrated, so moving backwards through it is as free as moving
+ * forwards. The forward-only design was charging a real cost (losing a place
+ * you liked) to enforce a commitment that the reroll cap already enforces.
+ *
+ * The rule, and it is the whole of the change:
+ *
+ *   `index`    is where you are and moves in both directions, freely.
+ *   `furthest` is how far you have ever gone, and only ever increases.
+ *
+ * A reroll is spent by advancing PAST `furthest` -- reaching somewhere new.
+ * Returning to a place you have already seen costs nothing and is never
+ * refused, including after the cap is exhausted, which is exactly the trap
+ * this fixes: three rerolls spent, wanting the second one back, no way there.
+ *
+ * So the cap still binds. You may still only ever meet four places. You simply
+ * are no longer punished for looking at them in order.
+ *
+ * Motion is the honest inverse: forward dismisses UPWARD and enters from
+ * below, backward dismisses DOWNWARD and enters from above. Going back should
+ * not look like going forward, or the direction stops meaning anything.
  */
 
 export interface RevealCandidate {
@@ -120,6 +150,14 @@ export function SurpriseReveal({ candidates, onClose, onCommit }: SurpriseReveal
 
   const [index, setIndex] = useState(0);
   /**
+   * How far through `sequence` you have ever been. Only increases.
+   *
+   * This, not `index`, is what a reroll is spent on -- see the header. Keeping
+   * them separate is what lets you walk back and forth through what you have
+   * already seen without the pips moving.
+   */
+  const [furthest, setFurthest] = useState(0);
+  /**
    * The pending reroll timer.
    *
    * Held in a ref so it can actually be cancelled. It used to be a local
@@ -146,7 +184,7 @@ export function SurpriseReveal({ candidates, onClose, onCommit }: SurpriseReveal
   const whyOpacity = useSharedValue(0);
 
   const play = useCallback(
-    (entering: boolean) => {
+    (fromBelow: boolean) => {
       if (reduced) {
         // Everything collapses to a crossfade. No state is encoded in motion
         // alone -- the pips carry a ring as well as a fill for this reason.
@@ -157,7 +195,10 @@ export function SurpriseReveal({ candidates, onClose, onCommit }: SurpriseReveal
         return;
       }
       nameOpacity.value = 0;
-      nameShift.value = entering ? 8 : 8;
+      // Enter from BELOW when moving forward, from ABOVE when moving back.
+      // This used to be `entering ? 8 : 8` -- both branches the same, so the
+      // parameter did nothing. It means something now.
+      nameShift.value = fromBelow ? 8 : -8;
       ruleWidth.value = 0;
       whyOpacity.value = 0;
 
@@ -171,32 +212,87 @@ export function SurpriseReveal({ candidates, onClose, onCommit }: SurpriseReveal
 
   useEffect(() => { play(true); }, [play]);
 
-  const reroll = useCallback(() => {
-    if (index >= MAX_REROLLS || index + 1 >= sequence.length) return;
+  /**
+   * Move through the sequence. `+1` forward, `-1` back.
+   *
+   * Refuses only three things: falling off either end, and advancing past
+   * `furthest` once the cap is spent. Note what is NOT refused -- going back
+   * is always allowed, including when `rerollsLeft` is zero.
+   */
+  const step = useCallback(
+    (delta: 1 | -1) => {
+      const target = index + delta;
+      if (target < 0 || target >= sequence.length) return;
+      // Reaching somewhere NEW is what costs. Returning never does.
+      if (target > furthest && furthest >= MAX_REROLLS) return;
 
-    if (reduced) {
-      setIndex((i) => i + 1);
-      play(true);
-      return;
-    }
+      const forward = delta === 1;
 
-    // 1. Pip first -- handled by `index` advancing after the exit, so the pip
-    //    state change is scheduled immediately while the name is still here.
-    // 2. Old name exits UPWARD (180ms), then
-    // 3. the new one enters from below.
-    nameOpacity.value = withTiming(0, { duration: 180, easing: Easing.in(Easing.cubic) });
-    nameShift.value = withTiming(-8, { duration: 180, easing: Easing.in(Easing.cubic) });
-    ruleWidth.value = withTiming(0, { duration: 120 });
-    whyOpacity.value = withTiming(0, { duration: 120 });
+      if (reduced) {
+        setIndex(target);
+        setFurthest((f) => Math.max(f, target));
+        play(forward);
+        return;
+      }
 
-    if (rerollTimer.current) clearTimeout(rerollTimer.current);
-    rerollTimer.current = setTimeout(() => {
-      rerollTimer.current = null;
-      setIndex((i) => i + 1);
-      nameShift.value = 8;
-      play(true);
-    }, 180);
-  }, [index, sequence.length, reduced, play, nameOpacity, nameShift, ruleWidth, whyOpacity]);
+      // 1. Pip first -- handled by `furthest` advancing after the exit, so the
+      //    pip state change is scheduled immediately while the name is here.
+      // 2. Old name exits (180ms) in the direction of travel: UPWARD when
+      //    moving forward, DOWNWARD when moving back.
+      // 3. The new one enters from the opposite side.
+      nameOpacity.value = withTiming(0, { duration: 180, easing: Easing.in(Easing.cubic) });
+      nameShift.value = withTiming(forward ? -8 : 8, {
+        duration: 180,
+        easing: Easing.in(Easing.cubic),
+      });
+      ruleWidth.value = withTiming(0, { duration: 120 });
+      whyOpacity.value = withTiming(0, { duration: 120 });
+
+      if (rerollTimer.current) clearTimeout(rerollTimer.current);
+      rerollTimer.current = setTimeout(() => {
+        rerollTimer.current = null;
+        setIndex(target);
+        setFurthest((f) => Math.max(f, target));
+        // play() sets the entry offset itself, from the direction.
+        play(forward);
+      }, 180);
+    },
+    [index, furthest, sequence.length, reduced, play, nameOpacity, nameShift, ruleWidth, whyOpacity],
+  );
+
+  /**
+   * A stable door into `step` for the gesture worklet.
+   *
+   * `step` changes identity every time `index` moves, and a Pan gesture
+   * rebuilt on every render loses an in-flight touch. The ref keeps the
+   * gesture object constant while still calling the current `step`.
+   */
+  const stepRef = useRef(step);
+  useEffect(() => {
+    stepRef.current = step;
+  });
+  const invokeStep = useCallback((d: 1 | -1) => stepRef.current(d), []);
+
+  /**
+   * Swipe, as asked for: right goes back, left goes forward.
+   *
+   * activeOffsetX keeps it from stealing vertical scrolls, and the 60px
+   * threshold keeps a lazy tap-drag from counting as a decision. This is an
+   * addition to the buttons, never a replacement -- §11 forbids a gesture
+   * being the only way to reach anything, and this screen is explicitly meant
+   * to work in a car.
+   */
+  const pan = useMemo(
+    () =>
+      Gesture.Pan()
+        .activeOffsetX([-20, 20])
+        .onEnd((e) => {
+          "worklet";
+          if (e.translationX > 60) runOnJS(invokeStep)(-1);
+          else if (e.translationX < -60) runOnJS(invokeStep)(1);
+        }),
+    [invokeStep],
+  );
 
   const commit = useCallback(() => {
     setCommitted(true);
@@ -218,7 +314,10 @@ export function SurpriseReveal({ candidates, onClose, onCommit }: SurpriseReveal
 
   if (!pick) return null;
 
-  const rerollsLeft = Math.min(MAX_REROLLS, sequence.length - 1) - index;
+  // From `furthest`, not `index`. Counting from `index` would REFUND a reroll
+  // every time you stepped back, turning the cap into an infinite loop:
+  // back, forward, back, forward.
+  const rerollsLeft = Math.min(MAX_REROLLS, sequence.length - 1) - furthest;
   const meta = [
     pick.cuisine,
     pick.locality,
@@ -238,7 +337,8 @@ export function SurpriseReveal({ candidates, onClose, onCommit }: SurpriseReveal
         ) : null}
       </View>
 
-      <View style={s.body}>
+      <GestureDetector gesture={pan}>
+        <View style={s.body}>
         <Animated.Text style={[s.pick, nameStyle]} numberOfLines={3}>
           {pick.name}
         </Animated.Text>
@@ -256,7 +356,8 @@ export function SurpriseReveal({ candidates, onClose, onCommit }: SurpriseReveal
             </View>
           ) : null}
         </Animated.View>
-      </View>
+        </View>
+      </GestureDetector>
 
       <View style={[s.acts, { paddingBottom: insets.bottom + theme.space.lg }]}>
         {committed ? (
@@ -289,14 +390,32 @@ export function SurpriseReveal({ candidates, onClose, onCommit }: SurpriseReveal
           <>
             <Drawn label="That's the one." onPress={commit} tone="primary" />
             {rerollsLeft > 0 ? (
-              <>
-                <Drawn
-                  label={rerollsLeft === 1 ? "One more, then you're committing." : "Something else"}
-                  onPress={reroll}
-                  tone="quiet"
-                />
-                <Pips total={MAX_REROLLS} spent={index} />
-              </>
+              <Drawn
+                label={rerollsLeft === 1 ? "One more, then you're committing." : "Something else"}
+                onPress={() => step(1)}
+                tone="quiet"
+              />
+            ) : null}
+            {/* Back sits with the pips rather than beside "Something else":
+                it is a recovery action, not an equal alternative, and the
+                hierarchy should say so. It survives `rerollsLeft` hitting
+                zero -- that is the trap it exists to open. */}
+            {index > 0 || rerollsLeft > 0 ? (
+              <View style={s.stepRow}>
+                {index > 0 ? (
+                  <Pressable
+                    onPress={() => step(-1)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Back to ${sequence[index - 1]?.name ?? "the previous place"}`}
+                    hitSlop={12}
+                  >
+                    <Text style={s.backStep}>The one before</Text>
+                  </Pressable>
+                ) : (
+                  <View />
+                )}
+                {rerollsLeft > 0 ? <Pips total={MAX_REROLLS} spent={furthest} /> : null}
+              </View>
             ) : null}
           </>
         )}
@@ -391,6 +510,11 @@ const build = ({ colours: c, space, radius, hairline }: Theme) =>
     pipLive: { backgroundColor: c.brass },
     pipSpent: { borderWidth: 1.5, borderColor: c.inkFaint },
     pipLabel: { ...type.label, color: c.inkFaint, marginLeft: 6 },
+    /* Back and the pips share a line: recovery on the left, cost on the
+       right. `pips` carries its own marginTop, so `backStep` matches it
+       rather than the row setting one for both. */
+    stepRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+    backStep: { ...type.label, color: c.inkMuted, marginTop: space.md },
     signoff: { ...type.pick, color: c.ink },
     after: { ...type.body, color: c.inkMuted },
   });

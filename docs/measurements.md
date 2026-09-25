@@ -274,6 +274,13 @@ filters cut that to the ~10 rendered. Until a Layer 2 filter existed there was
 nothing to cut with, so the app asked for exactly the 10 it showed — asking
 for 25 would have bought 15 Google calls for cards nobody sees.
 
+> **Stale as of 2026-09-24.** The shortlist moved from 10 to 15 cards, so every
+> "10" in this section is now 15, and the measured ~7 calls per realistic
+> session is expected to be ~10. That figure is an expectation, not a
+> measurement — the honest number needs another device run of the same
+> two-phase test (restart-only, then navigation-only) that produced the
+> original. Do not quote ~10 as measured until it is.
+
 A rating floor changes that, and the cost is real: **25 hydrations instead of
 10** on a cold search, only while a floor is set. Per-place caching (above)
 makes the second search in an area nearly free, which is what makes this

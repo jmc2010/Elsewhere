@@ -25,6 +25,7 @@ import { LocationPicker, type Origin, type Town } from "@/components/LocationPic
 import { ReviewCapture, type ReviewResult, type Tag } from "@/components/ReviewCapture";
 import { SurpriseReveal, type RevealCandidate } from "@/components/SurpriseReveal";
 import { tuning } from "@/config/tuning";
+import { loadRadiusPreference, saveRadiusPreference } from "@/lib/radiusPreference";
 import { appTier } from "@/lib/appTier";
 import { hasSeenColdStart } from "@/lib/coldStart";
 import {
@@ -118,7 +119,14 @@ interface HydrateResponse {
 }
 
 const MILES = 1609.344;
-const SHORTLIST = 10;
+/**
+ * The shortlist length. Read from tuning rather than written here: it is both
+ * the number of cards and the number of Google hydrations, so a literal in
+ * this file is a cost decision hiding in a screen -- exactly what §15 and the
+ * header of tuning.ts forbid. It was a literal `10` until 2026-09-24, silently
+ * duplicating `rerollPool.hydrate`.
+ */
+const SHORTLIST = tuning.rerollPool.hydrate;
 
 const PRICE: Record<string, string> = {
   PRICE_LEVEL_FREE: "Free",
@@ -190,8 +198,36 @@ function Shortlist() {
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
   const [sheet, setSheet] = useState<"none" | "where" | "what" | "what-first">("none");
   // Explicitly number: `tuning` is `as const`, so inference would pin this to
-  // the literal 5 and refuse the widened value.
+  // the literal default and refuse any other choice.
   const [radiusMiles, setRadiusMiles] = useState<number>(tuning.catalog.radiusMiles);
+  /**
+   * Whether the PERSISTED radius has been read yet.
+   *
+   * This gates both catalog queries, and the reason is cost rather than
+   * tidiness. Without it a cold open runs catalog_search at the default,
+   * renders a shortlist, hydrates 15 places -- and then the stored radius
+   * lands, the pool changes, and it hydrates a second, different 15. That is
+   * a silent doubling of the only line item that costs money, on every launch,
+   * for anyone who has ever changed the radius.
+   *
+   * Layer 1 being free is not the point; the hydration behind it is not.
+   */
+  const [radiusReady, setRadiusReady] = useState(false);
+
+  useEffect(() => {
+    void loadRadiusPreference().then((miles) => {
+      setRadiusMiles(miles);
+      setRadiusReady(true);
+    });
+  }, []);
+
+  // One effect rather than a save beside every setter -- the radius is set
+  // from the picker, from the exhausted screen's widen, and from anywhere
+  // added later, and a forgotten call site is a setting that silently stops
+  // being remembered.
+  useEffect(() => {
+    if (radiusReady) void saveRadiusPreference(radiusMiles);
+  }, [radiusMiles, radiusReady]);
 
   const [revealOpen, setRevealOpen] = useState(false);
   // Dismissed for this run only. "Later" must not mean "never" -- the prompt
@@ -277,7 +313,9 @@ function Shortlist() {
 
   const catalog = useQuery({
     queryKey: ["catalog_search", centre?.lat, centre?.lon, radiusMiles, userId, filters.cuisines],
-    enabled: centre !== null && userId !== null,
+    // radiusReady: see the note on the state. Querying before the stored
+    // radius lands costs a second round of hydration.
+    enabled: centre !== null && userId !== null && radiusReady,
     queryFn: async (): Promise<CatalogPlace[]> => {
       const { data, error } = await supabase.rpc("catalog_search", {
         p_lat: centre!.lat,
@@ -461,7 +499,7 @@ function Shortlist() {
 
   const cuisineGroups = useQuery({
     queryKey: ["cuisine-counts", centre?.lat, centre?.lon, radiusMiles],
-    enabled: centre !== null,
+    enabled: centre !== null && radiusReady,
     staleTime: 10 * 60 * 1000,
     queryFn: async (): Promise<CuisineGroup[]> => {
       const { data, error } = await supabase.rpc("catalog_cuisine_counts", {

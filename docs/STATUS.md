@@ -237,7 +237,69 @@ Three bugs found by measuring rather than reading, all worth remembering:
 
 ## Next
 
-**Use it for a week. Then decide from what annoys you, not from the spec.**
+**Verify the two changes the week produced, on device, then re-measure cost.**
+
+The week happened and produced two things, both built on 2026-09-24 and neither
+yet seen on a phone:
+
+1. **Lists were too short** — the cause was the radius gate, not the ranking,
+   and underneath that the control was simply missing. `How far` only rendered
+   when `dense` (`pool.length >= 200`, with `poolLimit` also 200, so it meant
+   "truncated"), which is never true from Valley View. Measured locally:
+
+       2mi   14 places, 2 towns
+       5mi   21 places, 2 towns     <- the whole week was spent here
+       10mi 107 places, 3 towns     <- new default
+       15mi 185 places, 6 towns     <- new ceiling
+
+   Gainesville's nearest place is **5.8 miles**, so the old gate missed 157
+   places by 0.8 of a mile. `How far` now renders at every density, offers
+   `[2, 5, 10, 15]`, defaults to 10, and is **remembered per device** (it used
+   to reset every cold open). Shortlist 10 -> 15 cards.
+2. **Seth's back-navigation in the reveal** — swipe right or `The one before`.
+   A reroll is now spent by reaching somewhere *new*; returning is free and is
+   never refused, even with the cap exhausted.
+
+What to do next, in order:
+
+- **Re-publish preview.** One preview update already went out
+  (4a05c7cf-ec20-4b11-9f7a-4dc2db947625) with the radius as a fixed 15 and no
+  visible control; the adjustable version supersedes it and has NOT been
+  published. Do not push production until seen — channel policy. Both changes
+  are OTA-safe and need no rebuild: gesture-handler has been a dependency since
+  the first scaffold commit and is an expo-router peer dep, so it is in every
+  existing binary.
+- **Note which app is which.** No build profile overrides the name or bundle
+  id, so preview and production are both "Elsewhere" at
+  `app.goelsewhere.elsewhere` and cannot coexist on one device. The
+  environment badge is the only way to tell them apart: preview shows
+  `PREVIEW · <host>`, production shows nothing. Installing a preview build over
+  the TestFlight app replaces it and will not preserve the container, which
+  would orphan that install's verdicts — see CLAUDE.md on the session key.
+- **Verify the swipe actually fires.** This is the app's first gesture, and
+  `GestureHandlerRootView` had never been mounted. It is wired at the root now,
+  but the failure mode is silence, exactly like the missing babel.config.js.
+  If the swipe does nothing, the buttons will still work — which is the tell.
+- **Re-measure calls per session.** Hydration went 10 -> 15, so the measured
+  ~7 per session should be ~10. That is arithmetic, not a measurement; redo the
+  two-phase device test (restart-only, then navigation-only) and update
+  docs/measurements.md, which is flagged stale.
+
+Still not started, per instruction: connections, group sessions, the in-app
+delete action.
+
+Nothing is to be started until that week produces something — explicitly not
+connections, not group sessions, not the in-app delete action. The next
+instruction comes from real decisions, not from this file.
+
+The build was checked for data-loss risk before the week began (2026-09-23)
+and is clear: no migration is in flight, and cold start is gated on the
+verdict count in Postgres rather than a device flag, so wiping AsyncStorage
+would not re-trigger it. The one real exposure is the anonymous session key,
+`sb-oygsbuailwpjgkqbxllp-auth-token`, which supabase-js derives from the
+project URL. Publishing a production OTA while `.env.local` is active would
+change it and orphan every verdict. Run `npm run env:which` first. See
+CLAUDE.md for why the obvious fix is itself dangerous right now.
 
 Everything the spec described for phase 2 is built and shipped. The app runs
 on both phones and in TestFlight; the cost model is measured rather than
@@ -270,8 +332,20 @@ Not now, but do not let them surprise you:
 2. **Account litter** — thirteen anonymous accounts with no verdicts and no
    lock-ins, artifacts of setup. See the hygiene note below.
 3. **App Privacy answers and a privacy policy URL.** Required before external
-   TestFlight review or the store. Location and a deferred account both need
-   declaring properly.
+   TestFlight review or the store. The audit behind them is done and recorded
+   in `docs/privacy-data-flows.md`, verified against the code rather than
+   assumed: no analytics or crash reporting exists anywhere in the tree, and
+   precise location appears in no retained log (tested with sentinel
+   coordinates across all twelve containers — zero hits). Google reviewer
+   avatars are fetched device-to-CDN and **stay that way** — ruled 2026-09-23,
+   because the avatar is Google's stated minimum attribution and caching or
+   proxying it breaks the licence. So Google is disclosed as a third party
+   receiving an IP address; it is not engineered away.
+
+   One thing still to confirm, and it is a two-minute query in the cloud SQL
+   editor rather than a task: that the cloud project's `log_statement` is
+   `ddl` and `log_min_duration_statement` is `-1`, as local reads. The exact
+   query and what would overturn the answer are in `privacy-data-flows.md`.
 4. **Beta App Review** for external testers. Internal testers skip it.
 
 ### A null that resolves itself beats a guess that persists

@@ -52,7 +52,12 @@ export interface LocationPickerProps {
 }
 
 const MILES = 1609.344;
-const RADIUS_CHOICES = [2, 5, 10, 20];
+/**
+ * Moved into tuning.ts on 2026-09-24. A list of offered radii is a product
+ * decision, and this file is a component -- keeping it here is what let it
+ * desync from the default in the first place.
+ */
+const RADIUS_CHOICES = tuning.catalog.radiusChoices;
 
 export function LocationPicker({
   towns,
@@ -116,27 +121,39 @@ export function LocationPicker({
           <Text style={s.meHint}>{localCount} within {radius} miles</Text>
         </Pressable>
 
-        {dense ? (
-          <View style={s.group}>
-            <Text style={s.lab}>How far</Text>
-            <View style={s.pills}>
-              {RADIUS_CHOICES.map((r) => {
-                const on = r === radius;
-                return (
-                  <Pressable
-                    key={r}
-                    onPress={() => setRadius(r)}
-                    accessibilityRole="radio"
-                    accessibilityState={{ selected: on }}
-                    style={({ pressed }) => [s.pill, on && s.pillOn, pressed && !on && s.pressed]}
-                  >
-                    <Text style={[s.pillLabel, on && s.pillLabelOn, tabular]}>{r} mi</Text>
-                  </Pressable>
-                );
-              })}
-            </View>
+        {/*
+          NOT gated on `dense` any more.
+
+          It was, and the gate was wrong in the one place it mattered most.
+          `dense` is `localCount >= 200` while `poolLimit` is also 200, so it
+          really means "the pool was truncated" -- true only in a city. From
+          Valley View the pool is 107 places at 10 miles and 185 at 15, so the
+          control was invisible exactly where the radius is the difference
+          between two towns and six. "I feel like the radius should be
+          adjustable" was a bug report, not a preference.
+
+          `dense` still shapes the rest of this sheet, where it is a fair
+          proxy: somebody in Gainesville thinks in towns, not miles.
+        */}
+        <View style={s.group}>
+          <Text style={s.lab}>How far</Text>
+          <View style={s.pills}>
+            {RADIUS_CHOICES.map((r) => {
+              const on = r === radius;
+              return (
+                <Pressable
+                  key={r}
+                  onPress={() => setRadius(r)}
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected: on }}
+                  style={({ pressed }) => [s.pill, on && s.pillOn, pressed && !on && s.pressed]}
+                >
+                  <Text style={[s.pillLabel, on && s.pillLabelOn, tabular]}>{r} mi</Text>
+                </Pressable>
+              );
+            })}
           </View>
-        ) : null}
+        </View>
 
         <View style={s.group}>
           <Text style={s.lab}>

@@ -170,6 +170,44 @@ Two rules about it:
   because the block travels and the prose does not. If a ruling needs forty
   rows, forty rows go in the block.
 
+## The anonymous session key is the only thing holding Layer 3 together
+
+There is no account yet. Every verdict, lock-in and correction is scoped to an
+anonymous `auth.uid()`, and the only thing that reconnects a returning user to
+their own history is a token in AsyncStorage under a key supabase-js derives
+from the project URL:
+
+```
+https://oygsbuailwpjgkqbxllp.supabase.co  ->  sb-oygsbuailwpjgkqbxllp-auth-token
+http://127.0.0.1:54321                    ->  sb-127-auth-token
+```
+
+Change the key and the app finds no session, signs in anonymously again, and
+gets a **new user id**. The old rows are not deleted — they are orphaned under
+an id nothing will ever present again, and because `hasSeenColdStart()` counts
+verdicts through RLS, the new identity sees zero and onboarding restarts. To
+the user that is indistinguishable from losing everything.
+
+Two ways to do it by accident:
+
+1. **Publishing an OTA to `production` while `.env.local` is active.**
+   `EXPO_PUBLIC_*` is inlined at bundle time, so the production install would
+   start looking under `sb-127-auth-token`. Check `npm run env:which` before
+   any production publish.
+2. **Setting an explicit `storageKey` in `createClient`.** This is the correct
+   long-term hardening — it decouples the session from the URL — but doing it
+   naively *causes* the loss it prevents, because every existing install
+   stores its token under the derived key. It needs a one-time migration that
+   reads the old key and writes the new one, kept for at least a release.
+   **Do not "harden" this casually.**
+
+The good news, and the reason this is recoverable: different URLs produce
+different keys rather than overwriting one. A session pointed away is dormant,
+not destroyed — restore the correct URL and it returns.
+
+This stops mattering once accounts exist (§8). Until then it is the single
+point of failure for the product's moat.
+
 ## Conventions
 
 - TypeScript strict mode throughout.

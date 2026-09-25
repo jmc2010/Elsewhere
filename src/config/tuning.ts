@@ -47,9 +47,50 @@ export const tuning = {
    */
   catalog: {
     poolLimit: 200,
-    radiusMiles: 5,
-    /** 5 miles in metres, which is what catalog_search takes. */
-    radiusMeters: 8047,
+    /**
+     * Raised 5 -> 10 on 2026-09-24, from a week of real use: "the lists are a
+     * little too short, there's so many good places missing."
+     *
+     * It went to 15 first and came back to 10 the same day, once the real
+     * problem turned out to be that the control was invisible outside dense
+     * areas. 10 is the cold-open default and 15 is the ceiling the user can
+     * reach; see `radiusChoices`. 10 already captures Gainesville, whose
+     * nearest place is 5.8 miles away.
+     *
+     * The missing places were not being out-ranked, they were outside the
+     * gate. From Valley View a 5-mile circle holds ~21 eligible places and
+     * excludes Gainesville (~10mi) and Denton entirely -- so the ranker was
+     * choosing ten from twenty-one, and doing it well, on a pool that had
+     * already thrown away everything worth eating.
+     *
+     * This is FREE. The pool is Layer 1, zero Google calls; widening it
+     * changes what the ranker may choose from and nothing about what gets
+     * hydrated. The expensive knob is `rerollPool.hydrate` below.
+     *
+     * The ceiling is 15 rather than 20 because past ~15 miles from here the
+     * pool starts pulling in north Denton, which is a different trip rather
+     * than a further one -- and because `confidenceByDistance` already
+     * refuses to put an unverified place in the top three beyond 10 miles.
+     */
+    radiusMiles: 10,
+    /** 10 miles in metres, which is what catalog_search takes. */
+    radiusMeters: 16093,
+    /**
+     * What the "How far" control offers. A product decision, so it lives here
+     * rather than in LocationPicker, where it sat until 2026-09-24 and had
+     * already desynced from the default once.
+     *
+     * The ceiling is 15 by ruling: past that the pool reaches north Denton,
+     * which is a different trip rather than a further one. `radiusMiles` above
+     * MUST be a member of this list or the control opens with nothing
+     * selected.
+     *
+     * A value persisted by an older build is validated against this list on
+     * read, not clamped -- see lib/radiusPreference.ts. A brief 2026-09-24
+     * build offered 25, and anyone who tapped it should land back on the
+     * default rather than on a radius the control can no longer show.
+     */
+    radiusChoices: [2, 5, 10, 15],
     /**
      * Whether to include rows whose name says they are not somewhere you eat
      * or drink. The shortlist says no.
@@ -109,7 +150,18 @@ export const tuning = {
    */
   exhausted: {
     maxTownMiles: 30,
-    /** If no town qualifies, widen to this instead. */
+    /**
+     * If no town qualifies, widen to this instead.
+     *
+     * MUST be greater than `catalog.radiusMiles`, or the escape hatch is a
+     * button that changes nothing -- AND no greater than the top of
+     * `catalog.radiusChoices`, or it sets a radius the control cannot display.
+     *
+     * It has now collided with both bounds in one day: it was 15 while the
+     * default was 5, then the default became 15 and this went to 30, then the
+     * ceiling became 15 and 30 was above it. 15 satisfies both -- it is the
+     * ceiling, and the default is 10 beneath it.
+     */
     widenedRadiusMiles: 15,
   },
 
@@ -228,7 +280,25 @@ export const tuning = {
    * Tune against: reroll exhaustion rate.
    */
   rerollPool: {
-    hydrate: 10,
+    /**
+     * The shortlist length AND the hydration count -- they are the same
+     * number because only what is displayed is hydrated.
+     *
+     * This is the one knob on this screen that costs money. Raised 10 -> 15
+     * on 2026-09-24 alongside the radius, with the cost stated rather than
+     * discovered: a realistic session goes from ~7 Google calls to ~10, so
+     * the 60/day default tier drops from ~8 sessions to ~6. Measured, not
+     * estimated -- see docs/measurements.md.
+     *
+     * `drawFromTop` stays at 4 deliberately. The reveal is a decision, not a
+     * browser, and widening it would make the reroll cap decorative. Nothing
+     * about the back-navigation added on 2026-09-24 changes that: it lets you
+     * return to one of the same four, never reach a fifth.
+     *
+     * Tune against: whether the list still reads as short at 15, and reroll
+     * exhaustion rate.
+     */
+    hydrate: 15,
     drawFromTop: 4,
   },
 
