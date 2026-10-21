@@ -451,9 +451,28 @@ function Shortlist() {
         // The tiebreak that can never tie. Pool order is itself deterministic
         // -- catalog_search seeds it per user per day -- so this makes the
         // whole chain reproducible.
-        (index.get(a.place_id)! - index.get(b.place_id)!))
-      .slice(0, SHORTLIST);
+        (index.get(a.place_id)! - index.get(b.place_id)!));
+    // NOT sliced here any more. The ordering is the whole pool; how much of
+    // it is shown is a display decision made below, and how much is HYDRATED
+    // is a separate one again. Conflating the three is what made the list
+    // feel like a 2% sample of Denton with no way past it.
   }, [pool]);
+
+  /**
+   * How many pages of the pool are on screen. One page is SHORTLIST places.
+   *
+   * Three weeks of use: "the number of restaurants in the area is just so
+   * dense that the search at whatever we're capped at seems ineffective. I
+   * feel like it's teasing me." Denton holds 750 places and the first page
+   * is 15 of them, chosen by Overture's record freshness -- so the cap was
+   * both small and arbitrary, with no way past it.
+   *
+   * Paging is FREE. Layer 1 is already in memory; the extra pages render
+   * from `pool` and issue no query at all, let alone a Google call. Only the
+   * first page is hydrated -- see `ids` below -- which is what keeps
+   * CLAUDE.md's "no Google call on browse" true while the list grows.
+   */
+  const [pages, setPages] = useState(1);
 
   // Pinned by id. Null means "not chosen yet this session".
   const [pinnedIds, setPinnedIds] = useState<string[] | null>(null);
@@ -462,15 +481,31 @@ function Shortlist() {
   // a refetch, or the arrival of a fresher GPS fix.
   useEffect(() => {
     setPinnedIds(null);
+    // Collapse back to one page on the same deliberate invalidations. A new
+    // filter is a new question; answering it with six pages of the old one
+    // scrolled open is not what was asked.
+    setPages(1);
   }, [filters, origin, radiusMiles]);
 
   useEffect(() => {
     if (pinnedIds === null && ranked.length > 0) {
+      // The whole ordering is pinned, not just the first page -- otherwise
+      // paging past 15 would walk into unpinned territory and reshuffle.
       setPinnedIds(ranked.map((p) => p.place_id));
     }
   }, [pinnedIds, ranked]);
 
-  const shortlist = useMemo(() => {
+  /**
+   * The stable ordering of the WHOLE pool, pinned by id for the session.
+   *
+   * Was called `shortlist` and was 15 long. It is now the full ordering, and
+   * the two things that used to be the same number are separated below:
+   *
+   *   `shortlist` -- the first page. Hydrated, and the reveal draws from it.
+   *   `visible`   -- what is on screen. Grows with `pages`. Never hydrated
+   *                  beyond the first page.
+   */
+  const ordered = useMemo(() => {
     if (!pinnedIds) return ranked;
     const byId = new Map(pool.map((p) => [p.place_id, p]));
     // Drop anything that has left the pool -- vetoed, corrected away, or now
@@ -479,6 +514,21 @@ function Shortlist() {
     const kept = pinnedIds.map((id) => byId.get(id)).filter((p): p is CatalogPlace => !!p);
     return kept.length > 0 ? kept : ranked;
   }, [pinnedIds, pool, ranked]);
+
+  /**
+   * The first page. THIS is the hydrated set, and the only one.
+   *
+   * Keeping the name means the reveal, the hydration guard and the cost model
+   * all continue to mean exactly what they meant before paging existed.
+   */
+  const shortlist = useMemo(() => ordered.slice(0, SHORTLIST), [ordered]);
+
+  /** What is actually on screen. Everything past the first page is Layer 1. */
+  const visible = useMemo(
+    () => ordered.slice(0, SHORTLIST * pages),
+    [ordered, pages],
+  );
+  const moreAvailable = ordered.length > visible.length;
 
   // ONLY the displayed shortlist is hydrated -- never `pool`, which is 200
   // rows of Layer 1 that exist so ranking has something to choose from. Spec
@@ -963,7 +1013,11 @@ function Shortlist() {
         </View>
 
             <View style={s.list}>
-              {shortlist.map((p, i) => (
+              {/* `visible`, not `shortlist`. Everything past the first page
+                  is Layer 1 only -- liveById has no entry, so toCard renders
+                  the unhydrated state. That is the whole mechanism by which
+                  browsing stays free. */}
+              {visible.map((p, i) => (
                 <PlaceCard
                   key={p.place_id}
                   {...toCard(p, liveById.get(p.place_id), () =>
@@ -978,6 +1032,39 @@ function Shortlist() {
                 />
               ))}
             </View>
+
+            {/* The way past the first fifteen.
+                Free: it slices an array already in memory. No query, no
+                Google call. The count is stated because "More" without a
+                number is the same tease in a smaller font. */}
+            {moreAvailable ? (
+              <Pressable
+                onPress={() => setPages((n) => n + 1)}
+                accessibilityRole="button"
+                accessibilityLabel={`Show more places. ${ordered.length - visible.length} remaining.`}
+                style={({ pressed }) => [s.more, pressed && s.morePressed]}
+              >
+                <Text style={s.moreLabel}>More</Text>
+                <Text style={s.moreCount}>
+                  {ordered.length - visible.length} more within {radiusMiles} miles
+                </Text>
+              </Pressable>
+            ) : null}
+
+            {/* The escape hatch, at the bottom because this is the moment it
+                is wanted: you have looked and none of them is it. Carries the
+                current centre so results are sorted by distance from where
+                you are LOOKING, not from where the phone is. */}
+            {centre ? (
+              <Pressable
+                onPress={() => router.push(`/find?lat=${centre.lat}&lon=${centre.lon}`)}
+                accessibilityRole="button"
+                style={({ pressed }) => [s.findRow, pressed && s.morePressed]}
+              >
+                <Text style={s.findLabel}>Went somewhere else?</Text>
+                <Text style={s.moreCount}>Find it by name and tell me how it was</Text>
+              </Pressable>
+            ) : null}
 
             {/* Licence obligation (§7): shown whenever Google data is on screen. */}
             {liveById.size > 0 ? (
@@ -1318,6 +1405,20 @@ const build = ({ colours: c, space, radius, hairline }: Theme) =>
       backgroundColor: c.brass, paddingVertical: 15, paddingHorizontal: space.xxl,
     },
     btnPressed: { opacity: 0.7 },
+    /* Drawn, not a platform button, and deliberately quieter than `btn`:
+       continuing to browse is not the action this screen wants you to take.
+       Full width so it reads as the end of the list rather than a choice
+       sitting beside the cards. */
+    more: {
+      marginTop: space.lg, paddingVertical: space.lg,
+      borderTopWidth: hairline, borderTopColor: c.rule,
+      alignItems: "center", rowGap: 4,
+    },
+    morePressed: { opacity: 0.6 },
+    moreLabel: { ...type.button, color: c.brass },
+    moreCount: { ...type.tileMeta, color: c.inkFaint },
+    findRow: { paddingVertical: space.lg, alignItems: "center", rowGap: 4 },
+    findLabel: { ...type.button, color: c.ink },
     btnWide: { paddingHorizontal: 0, marginTop: 0, paddingVertical: 13 },
     floatWrap: { position: "absolute", left: 0, right: 0, alignItems: "center" },
     fadeWrap: {

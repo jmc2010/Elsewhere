@@ -67,8 +67,17 @@ export interface ReviewCaptureProps {
   subject: ReviewSubject;
   tags: Tag[];
   onSubmit: (result: ReviewResult) => void;
-  /** "We didn't end up going" -- resolves the lock-in without a verdict. */
-  onDidNotGo: () => void;
+  /**
+   * "We didn't end up going" -- resolves the lock-in without a verdict.
+   *
+   * OPTIONAL, and omitted means the control is not rendered. There is
+   * nothing to resolve when the review is reached from a place screen rather
+   * than from a lock-in ("I've been here"), and offering "We didn't go" to
+   * somebody who has just said they went is nonsense. It is also the one
+   * irreversible control on this sheet, so it should not appear anywhere it
+   * cannot do anything useful.
+   */
+  onDidNotGo?: () => void;
   onDismiss: () => void;
   busy?: boolean;
 }
@@ -231,9 +240,14 @@ export function ReviewCapture({
           {/* A lock-in is a choice, not a visit. People commit and then don't
               go, and recording that honestly is better than leaving a
               phantom visit in the history. */}
-          <Pressable onPress={onDidNotGo} accessibilityRole="button" hitSlop={8}>
-            <Text style={s.quiet}>We didn&apos;t go</Text>
-          </Pressable>
+          {onDidNotGo ? (
+            <Pressable onPress={onDidNotGo} accessibilityRole="button" hitSlop={8}>
+              <Text style={s.quiet}>We didn&apos;t go</Text>
+            </Pressable>
+          ) : (
+            // Holds the left end so `Later` stays right under space-between.
+            <View />
+          )}
           <Pressable onPress={onDismiss} accessibilityRole="button" hitSlop={8}>
             <Text style={s.quiet}>Later</Text>
           </Pressable>

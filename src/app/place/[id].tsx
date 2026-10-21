@@ -6,7 +6,9 @@ import { ActivityIndicator, Linking, Pressable, ScrollView, StyleSheet, Text, Vi
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { CorrectionSheet, type CorrectionResult } from "@/components/CorrectionSheet";
+import { ReviewCapture, type ReviewResult, type Tag } from "@/components/ReviewCapture";
 import { appTier } from "@/lib/appTier";
+import { scheduleReviewPrompt } from "@/lib/reviewPrompt";
 import { ensureSession, supabase } from "@/lib/supabase";
 import { useTheme, type Theme, type ThemeName } from "@/theme/tokens";
 import { tabular, type } from "@/theme/type";
@@ -152,6 +154,121 @@ function PlaceDetail() {
     },
   });
 
+  /**
+   * Layer 3 capture, added 2026-10-20 after three weeks of use.
+   *
+   * "I ended up coming up with a different idea that I went with and
+   * enjoyed... I wasn't able to tell the app where I ended up going. No way
+   * to review yet, or start recording where I was going."
+   *
+   * Until now a lock-in could only be created by committing to a place the
+   * reveal happened to offer, and a verdict could only be written by
+   * answering a prompt from such a lock-in. So everything the product knows
+   * about somebody was gated behind a list showing 2% of a dense town, and
+   * the measured result was one real verdict in a month.
+   *
+   * Two entrances, matching the two tenses in the complaint:
+   *   GOING  -- forward. Creates a lock-in, which schedules the review
+   *             prompt, which is the loop that already works.
+   *   BEEN   -- past. Writes the verdict directly. ReviewCapture already
+   *             supports a null lockinId: "speculative rather than from a
+   *             lock-in" is this case, anticipated and never wired up.
+   *
+   * Neither writes to `visits`: household_id is NOT NULL and its RLS policy
+   * is membership-based, so a solo user cannot write one. That is why the
+   * table is empty and why catalog_search's last_visited_at is always null.
+   * Flagged, not fixed here -- it needs households.
+   */
+  const [logging, setLogging] = useState(false);
+
+  const tagList = useQuery({
+    queryKey: ["tags"],
+    staleTime: Infinity,
+    queryFn: async (): Promise<Tag[]> => {
+      const { data, error } = await supabase
+        .from("tags").select("key,label,valence").order("sort_order");
+      if (error) throw error;
+      return (data ?? []) as Tag[];
+    },
+  });
+
+  const going = useMutation({
+    mutationFn: async () => {
+      const userId = await ensureSession();
+      const { data, error } = await supabase
+        .from("place_lockins")
+        .insert({ user_id: userId, place_id: id })
+        .select("id")
+        .single();
+      if (error) throw error;
+      // The same scheduling the reveal uses. Failing to schedule is not worth
+      // failing the lock-in over -- the function swallows its own errors.
+      await scheduleReviewPrompt(data.id, String(id), d?.display_name ?? "there");
+      return data.id as string;
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["place_detail", id] });
+    },
+  });
+
+  const been = useMutation({
+    mutationFn: async (r: ReviewResult) => {
+      const userId = await ensureSession();
+      // Identical shape to the lock-in review path in index.tsx: one current
+      // verdict per user per place, tags replaced wholesale rather than
+      // accumulated.
+      const { data: verdict, error } = await supabase
+        .from("place_verdicts")
+        .upsert(
+          {
+            user_id: userId,
+            place_id: id,
+            verdict: r.verdict,
+            note: r.note,
+            visited_on: new Date().toISOString().slice(0, 10),
+          },
+          { onConflict: "user_id,place_id" },
+        )
+        .select("id")
+        .single();
+      if (error) throw error;
+
+      await supabase.from("verdict_tags").delete().eq("verdict_id", verdict.id);
+      if (r.tagKeys.length > 0) {
+        await supabase.from("verdict_tags").insert(
+          r.tagKeys.map((tag_key) => ({ verdict_id: verdict.id, tag_key })),
+        );
+      }
+
+      /**
+       * An already-resolved lock-in, recording the visit itself.
+       *
+       * The verdict cannot carry this: it is one upserted row per user per
+       * place, so going back a second time overwrites the first and leaves
+       * no trace that it happened twice. place_lockins is append-only, so
+       * after migration 0058 it is the visit ledger -- it is where
+       * catalog_search now reads last_visited_at and visit_count from, and
+       * therefore the only thing that can ever make recency decay real.
+       *
+       * locked_at is now because "I've been here" means recently; there is
+       * no date picker and inventing one would be a worse guess than today.
+       * Logged after the verdict and not awaited into the same failure: a
+       * verdict that saved and a ledger row that did not is still a better
+       * outcome than losing both.
+       */
+      await supabase.from("place_lockins").insert({
+        user_id: userId,
+        place_id: id,
+        resolved_at: new Date().toISOString(),
+        did_go: true,
+      });
+    },
+    onSuccess: () => {
+      setLogging(false);
+      void qc.invalidateQueries({ queryKey: ["place_detail", id] });
+    },
+  });
+
   const correct = useMutation({
     mutationFn: async (r: CorrectionResult) => {
       const userId = await ensureSession();
@@ -202,6 +319,18 @@ function PlaceDetail() {
   const quotaSpent = live.data?.status === "quota_exceeded";
   const meta = [d.cuisines[0], d.locality_suspect ? null : d.locality].filter(Boolean) as string[];
 
+  if (logging && tagList.data) {
+    return (
+      <ReviewCapture
+        subject={{ placeId: String(id), name: d.display_name, lockinId: null }}
+        tags={tagList.data}
+        busy={been.isPending}
+        onSubmit={(r) => been.mutate(r)}
+        onDismiss={() => setLogging(false)}
+      />
+    );
+  }
+
   return (
     <View style={s.screen}>
       <ScrollView
@@ -225,6 +354,43 @@ function PlaceDetail() {
           <Act label="Directions" onPress={() => void Linking.openURL(`https://maps.google.com/?q=${d.lat},${d.lon}`)} />
           {d.website ? <Act label="Website" onPress={() => void Linking.openURL(d.website!)} /> : null}
         </View>
+
+        {/* Layer 3, kept separate from the row above on purpose. Call,
+            Directions and Website send you somewhere else; these two are the
+            only things on this screen that tell the app anything. Mixing them
+            into the same row would make the product's whole point look like a
+            fourth utility. */}
+        <View style={s.capture}>
+          <Pressable
+            onPress={() => going.mutate()}
+            disabled={going.isPending || going.isSuccess}
+            accessibilityRole="button"
+            style={({ pressed }) => [s.cap, s.capPrimary, pressed && s.capPressed]}
+          >
+            <Text style={s.capPrimaryLabel}>
+              {going.isSuccess ? "Locked in" : going.isPending ? "…" : "I'm going here"}
+            </Text>
+          </Pressable>
+
+          <Pressable
+            onPress={() => setLogging(true)}
+            accessibilityRole="button"
+            style={({ pressed }) => [s.cap, pressed && s.capPressed]}
+          >
+            <Text style={s.capLabel}>
+              {d.my_verdict ? "Change what I said" : "I've been here"}
+            </Text>
+          </Pressable>
+        </View>
+
+        {/* Said once, after the fact, rather than as a promise on the button:
+            the button should read as the action, not as its consequence. */}
+        {going.isSuccess ? (
+          <Text style={s.capNote}>I&apos;ll ask how it went.</Text>
+        ) : null}
+        {going.isError ? (
+          <Text style={s.capNote}>That didn&apos;t save. Try again?</Text>
+        ) : null}
 
         {d.my_verdict ? (
           <Section title="Yours">
@@ -453,6 +619,21 @@ const build = ({ colours: c, space, radius, hairline }: Theme) =>
     actions: { flexDirection: "row", flexWrap: "wrap", gap: space.sm, marginTop: space.lg },
     act: { borderWidth: hairline, borderColor: c.ruleStrong, borderRadius: radius.pill, paddingVertical: 8, paddingHorizontal: space.lg },
     actLabel: { ...type.meta, color: c.ink },
+
+    /* The capture pair. Deliberately NOT pills like `act` above -- those are
+       outbound utilities, these are the two controls that write to Layer 3,
+       and they should not read as a fourth and fifth way to leave. */
+    capture: { flexDirection: "row", gap: space.sm, marginTop: space.lg },
+    cap: {
+      flexGrow: 1, flexBasis: 0, alignItems: "center",
+      borderWidth: hairline, borderColor: c.ruleStrong,
+      borderRadius: radius.button, paddingVertical: 13,
+    },
+    capPrimary: { backgroundColor: c.brass, borderColor: c.brass },
+    capPressed: { opacity: 0.7 },
+    capPrimaryLabel: { ...type.button, color: c.brassInk },
+    capLabel: { ...type.button, color: c.ink },
+    capNote: { ...type.reason, color: c.inkMuted, marginTop: space.sm },
 
     section: { marginTop: space.xxl },
     sectionTitle: { ...type.label, color: c.inkFaint, marginBottom: space.md },

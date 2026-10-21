@@ -237,406 +237,60 @@ Three bugs found by measuring rather than reading, all worth remembering:
 
 ## Next
 
-**Verify the town counts on device, then re-measure cost.**
-
-Migration 0056 is applied to local AND cloud, and the OTA is published. Cloud
-was applied with psql, one file, NOT `supabase db push` -- see the new CLAUDE.md
-section. That discovery is the important part of this session:
-
-  - The cloud database has no `supabase_migrations` schema at all. Every
-    migration got there by hand, so the CLI thinks none of the 56 are applied.
-  - `supabase db push` would therefore replay from 0001 against a live
-    database holding 39,304 places and 19 verdicts. It was nearly run. Do not.
-
-Verified on cloud after applying:
-  - signature now (p_lat, p_lon, p_limit, p_cuisines)
-  - Valley View 19->1, Sanger 53->2, Gainesville 161->13, Lindsay 6->0,
-    Pilot Point 49->7, Tioga 12->0  (filtered to mexican)
-  - the OLD 3-arg call still resolves, so the previously deployed app did not
-    break in the window before the OTA landed
-
-Verified locally, from scratch (all 56 migrations + seed):
-  - unfiltered: match_count == place_count
-  - mexican: Gainesville 154 -> 11, Valley View 16 -> 1, Dallas 1262 -> 69
-  - no town disappears when filtered (same row count either way)
-  - group slugs expand: asian 7 >= its leaf chinese 3
-  - an unknown slug raises rather than silently returning everything
-
-The week happened and produced two things, both built on 2026-09-24 and neither
-yet seen on a phone:
-
-1. **Lists were too short** — the cause was the radius gate, not the ranking,
-   and underneath that the control was simply missing. `How far` only rendered
-   when `dense` (`pool.length >= 200`, with `poolLimit` also 200, so it meant
-   "truncated"), which is never true from Valley View. Measured locally:
-
-       2mi   14 places, 2 towns
-       5mi   21 places, 2 towns     <- the whole week was spent here
-       10mi 107 places, 3 towns     <- new default
-       15mi 185 places, 6 towns     <- new ceiling
-
-   Gainesville's nearest place is **5.8 miles**, so the old gate missed 157
-   places by 0.8 of a mile. `How far` now renders at every density, offers
-   `[2, 5, 10, 15]`, defaults to 10, and is **remembered per device** (it used
-   to reset every cold open). Shortlist 10 -> 15 cards.
-2. **Seth's back-navigation in the reveal** — swipe right or `The one before`.
-   A reroll is now spent by reaching somewhere *new*; returning is free and is
-   never refused, even with the cap exhausted.
-
-What to do next, in order:
-
-- **Re-publish preview.** One preview update already went out
-  (4a05c7cf-ec20-4b11-9f7a-4dc2db947625) with the radius as a fixed 15 and no
-  visible control; the adjustable version supersedes it and has NOT been
-  published. Do not push production until seen — channel policy. Both changes
-  are OTA-safe and need no rebuild: gesture-handler has been a dependency since
-  the first scaffold commit and is an expo-router peer dep, so it is in every
-  existing binary.
-- **Note which app is which.** No build profile overrides the name or bundle
-  id, so preview and production are both "Elsewhere" at
-  `app.goelsewhere.elsewhere` and cannot coexist on one device. The
-  environment badge is the only way to tell them apart: preview shows
-  `PREVIEW · <host>`, production shows nothing. Installing a preview build over
-  the TestFlight app replaces it and will not preserve the container, which
-  would orphan that install's verdicts — see CLAUDE.md on the session key.
-- **Verify the swipe actually fires.** This is the app's first gesture, and
-  `GestureHandlerRootView` had never been mounted. It is wired at the root now,
-  but the failure mode is silence, exactly like the missing babel.config.js.
-  If the swipe does nothing, the buttons will still work — which is the tell.
-- **Re-measure calls per session.** Hydration went 10 -> 15, so the measured
-  ~7 per session should be ~10. That is arithmetic, not a measurement; redo the
-  two-phase device test (restart-only, then navigation-only) and update
-  docs/measurements.md, which is flagged stale.
-
-Still not started, per instruction: connections, group sessions, the in-app
-delete action.
-
-Nothing is to be started until that week produces something — explicitly not
-connections, not group sessions, not the in-app delete action. The next
-instruction comes from real decisions, not from this file.
-
-The build was checked for data-loss risk before the week began (2026-09-23)
-and is clear: no migration is in flight, and cold start is gated on the
-verdict count in Postgres rather than a device flag, so wiping AsyncStorage
-would not re-trigger it. The one real exposure is the anonymous session key,
-`sb-oygsbuailwpjgkqbxllp-auth-token`, which supabase-js derives from the
-project URL. Publishing a production OTA while `.env.local` is active would
-change it and orphan every verdict. Run `npm run env:which` first. See
-CLAUDE.md for why the obvious fix is itself dangerous right now.
-
-Everything the spec described for phase 2 is built and shipped. The app runs
-on both phones and in TestFlight; the cost model is measured rather than
-estimated; the environment shape is settled and both of its unverified paths
-have been verified. There is no obvious next build, and that is the point:
-the next instruction should come from real use.
-
-What real use will produce, and roughly what it costs to act on:
-
-- **Ranking.** Today the shortlist is novelty-first with a deterministic
-  tiebreak. It is explicitly NOT §3's ranking, which needs tag affinity,
-  friend verdicts and confidence weights. Those need verdicts to exist, which
-  needs the review prompt to have fired a few dozen times. A week of dinners
-  is the input.
-- **The 5% sample in dense areas.** The pool is 200 of downtown Dallas's
-  3,982. Seeded rotation makes 2,560 reachable across a month, so it is a
-  rotation problem rather than an exclusion one — but the fix is moving
-  ranking into `catalog_search` with the §15 thresholds in a tuning table.
-  Worth doing when Dallas use is real, not before.
-- **The §15 knobs.** Every one is a guess. Recency windows, novelty ratio,
-  reroll pool, the 6-hour prompt delay, the 20-call tier cap. None should be
-  touched until there is behaviour to tune against.
-
-### Things that will need doing before anyone external is invited
-
-Not now, but do not let them surprise you:
-
-1. **The raw error string** on place detail must not ship to a stranger. It
-   is deliberate as a dev diagnostic and logged as pre-launch.
-2. **Account litter** — thirteen anonymous accounts with no verdicts and no
-   lock-ins, artifacts of setup. See the hygiene note below.
-3. **App Privacy answers and a privacy policy URL.** Required before external
-   TestFlight review or the store. The audit behind them is done and recorded
-   in `docs/privacy-data-flows.md`, verified against the code rather than
-   assumed: no analytics or crash reporting exists anywhere in the tree, and
-   precise location appears in no retained log (tested with sentinel
-   coordinates across all twelve containers — zero hits). Google reviewer
-   avatars are fetched device-to-CDN and **stay that way** — ruled 2026-09-23,
-   because the avatar is Google's stated minimum attribution and caching or
-   proxying it breaks the licence. So Google is disclosed as a third party
-   receiving an IP address; it is not engineered away.
-
-   One thing still to confirm, and it is a two-minute query in the cloud SQL
-   editor rather than a task: that the cloud project's `log_statement` is
-   `ddl` and `log_min_duration_statement` is `-1`, as local reads. The exact
-   query and what would overturn the answer are in `privacy-data-flows.md`.
-4. **Beta App Review** for external testers. Internal testers skip it.
-
-### A null that resolves itself beats a guess that persists
-
-Thirteen anonymous accounts have `app_tier` null, so they resolve to the
-global 60 rather than the tier cap of 20. They were deliberately NOT
-backfilled.
-
-The principle, which generalises well beyond this column: **a null that
-corrects itself on first use is better than a guess written into the
-database.** A backfilled `app_tier = 'preview'` would be a claim nobody
-verified, indistinguishable from a real observation the moment it lands, and
-wrong forever for any account that was actually something else. The null is
-honest about not knowing, and the first real call replaces it with an
-observation.
-
-The exposure is theoretical anyway: a dormant account makes no calls, so its
-cap is never reached. Nothing is spent by being patient.
-
-### Hygiene before external testers: the account litter
-
-Thirteen anonymous accounts exist that are artifacts of setup — created by
-device installs, reinstalls, and diagnostic calls during development. They
-have no verdicts and no lock-ins.
-
-**Before anyone external is invited**, they should be distinguishable from
-real users, or every metric computed over `auth.users` is wrong from day one.
-The filter is straightforward:
-
-```sql
-select u.id
-from auth.users u
-where not exists (select 1 from place_verdicts v where v.user_id = u.id)
-  and not exists (select 1 from place_lockins l where l.user_id = u.id);
-```
-
-**Not to be done now, and not by deleting anything.** Marking is enough —
-deletion cascades to rows that may be the only evidence of how something
-behaved, and "this account is mine" is a fact worth keeping rather than
-erasing. Revisit when the first external tester is invited, not before.
-
-### Known gaps, carried forward deliberately
-
-- **A raw error message can still reach a user.** Place detail renders the
-  Layer 2 error string verbatim when the failure is unexpected. That is
-  deliberate as a dev diagnostic — a friendly "something went wrong" cost an
-  entire round of cost testing by hiding a broken edge function — but it must
-  not ship to a real user. **Pre-launch item.** The one failure that already
-  has designed copy, quota exhaustion, is handled separately and correctly
-  (§10: "I'm out of Google's ratings for tonight.").
-
-- **`catalog_search` returns none of the new catalog fields.** Item 1 above.
-- **Five Nekter rows keep their store number** in `display_name`
-  (`8517 - Nekter Juice Bar`). The numeric-head guard prevents the worse
-  outcome (`8517`) but does not strip the prefix. Stripping it and keeping the
-  tail is a new rule nobody has specified.
-- **Co-location cannot scale yet.** The pass found 3 successor candidates —
-  including the known Dairy Queen → Tia's Tex-Mex at 42.6m — but from only
-  102 Google resolution attempts out of 39,304 places. The signal grows as
-  hydration happens; there is nothing to fix.
-- **Duplicate catalog rows** that resolve to one `google_place_id` are
-  flagged, not deduplicated. **`display_name` must NEVER be a dedup key.**
-  Name cleaning merges 39 groups of distinct originals — `Crumbl` covers 27
-  distinct names across 29 rows, `HTeaO` covers 20, and `Simply South -
-  Indian Vegetarian Restaurant` appears 3 times. Those are real, distinct
-  places; the meta line disambiguates them on the card. Deduplicating on the
-  cleaned name would delete them.
-- **Judging a non-destination pattern: the test is semantic ambiguity, not
-  hit count.** `warehouse` was dropped (0037) because "The Warehouse" is a
-  plausible bar name — the pattern is unsound at any volume, and a hundred
-  correct hits would not make it safe. `bitcoin atm`, `roasting facility`,
-  `commissary` and `distribution` were kept on 1–2 hits each, because those
-  words do not land in a restaurant's name by accident. Apply the same test
-  to any pattern proposed later; measured hit rate is corroboration, never
-  the argument.
-
-  **And the test needs evidence, not intuition.** `commissary` was ruled
-  semantically unambiguous and kept on that basis; the catalog then produced
-  *The Commissary | Tea House* and *Commissary | Cafe*, and `distribution`
-  produced *Distribution Bar | Cocktail Bar*. Both were dropped in 0046. The
-  test was right and was applied badly: before keeping a pattern, query the
-  catalog for rows that match it AND carry a cuisine. If any do, the word is
-  ambiguous in practice whatever it sounds like in the abstract.
-- **Ranking moves into `catalog_search`** with §15 thresholds held in a
-  tuning table, when Dallas pool sizes get uncomfortable. Recorded, not
-  scheduled. The interim is ordering the pool by `update_time desc, id`,
-  which is unbiased with respect to distance — but measured, it does not
-  discriminate much either: 647 of the top 1000 Dallas rows share one bulk
-  timestamp, so the tie-break falls through to `id` and truncation is
-  effectively arbitrary within that block. Unbiased was the goal; "freshest
-  first" is not what it actually delivers in dense areas.
-- **Quota day boundary is UTC**, so it resets at 7pm Central. Needs a
-  timezone on `profiles`.
-- **32 low-confidence brand mappings** are still `reviewed = false`.
-- **No connections model.** `place_verdicts` RLS is self-only; §4 wants
-  one-hop visibility. Widening it is a deliberate future migration.
-- **Overture releases are not being archived.** Spec §12 says start now: the
-  2026-07-22.0 prefix exists but its data is gone, so today's release is the
-  only diffable one. Until archiving starts, `New around here` stays unset in
-  `src/config/tuning.ts`.
-
-### Stale catalog entries are a real problem, and chains betray them
-
-Two confirmed on the ground in Valley View alone, both marked `open` by
-Overture:
-
-- **Rider's Smokehouse** sold years ago; the premises have been two other
-  restaurants since.
-- **The Dairy Queen** shut, and the building is now Tia's Tex-Mex.
-
-Google's `businessStatus` — the corrective §11 anticipated — helped with
-neither, because it only works when Google still carries the dead listing.
-For both of these Google carries nothing.
-
-What does work is an asymmetry in Google's coverage. **Chain coverage is
-effectively complete**: asked for "Dairy Queen, Valley View, TX" it offered
-the Sanger branch 14km away, which is Google saying *there isn't one here*.
-**Rural independent coverage is not complete**, and that gap is the reason
-this catalog exists.
-
-So 0016 suppresses a known chain that fails resolution, and leaves
-independents alone. 7,755 places (19.7%) match `brand_cuisine_map`, and only
-those that also fail resolution are affected. It is recorded as
-`probably_closed`, deliberately separate from `permanently_closed` — one is
-our inference from an absence, the other is Google asserting it, and they
-should not be conflated.
-
-Known false positive: a brand-new franchise Google has not indexed yet stays
-hidden until the 30-day retry.
-
-**Also worth knowing:** Dairy Queen and Tia's Tex-Mex are **42.6m apart** in
-Overture's coordinates despite being the same building, so `colocated_count`
-(30m) did not flag it. Rider's and its successor were 8m apart. Widening the
-radius is expensive — 50m flags 70% of the catalog, 75m flags 79% — and would
-not have helped, since the name check rejected it anyway.
-
-### What the first live hydration found
-
-Two bugs, neither visible without real calls.
-
-- **Place Details and Text Search field masks are not interchangeable.**
-  `searchText` returns `{places: [...]}` so its mask is prefixed
-  `places.rating`; Place Details returns a single Place and needs plain
-  `rating`. The shortlist mask carried the prefix, so every hydration
-  returned 400 and surfaced as `live_status: error` — which reads like a key
-  or permissions problem and sent the search the wrong way.
-- **A failed resolution was permanent.** `google_resolution_failed` was
-  terminal, so Valley View's Dairy Queen would have stayed catalog-only
-  forever after one bad lookup — despite `measurements.md` saying explicitly
-  that coordinate drift makes failures worth retrying. 0015 adds a 30-day
-  window. The quota also charged for places that short-circuit without
-  calling Google; fixed alongside.
-
-### What the first hand-audit found
-
-Auditing the first 25 results on a real phone surfaced two Overture problems
-that no amount of schema review would have caught, plus a bug in our own
-resolution rule. This is the §11 audit earning its keep.
-
-1. **Closed restaurants are still listed as open.** Rider's Smokehouse in
-   Valley View sold years ago and the premises have been two other places
-   since; Overture says `open`. Google's `businessStatus` at hydration is the
-   designed corrective (§11 risk 2) and `places-proxy` implements it — but it
-   only fires once that function is deployed.
-
-2. **That exposed a real bug in our resolution rule.** Rider's successor,
-   Middlebrooks Bar & Grill, is 8m away and trading. The 30m same-building
-   pass would have accepted Middlebrooks as Rider's and stored its
-   `place_id` permanently. **58% of the catalog shares an address within
-   30m**, so this was not a corner case. Fixed in 0013: proximity alone
-   settles a match only where `colocated_count = 0`.
-
-3. **Some addresses belong to a different place entirely.** "Santiago's
-   Restaurant" renders as Colorado City, 261 miles west, while sitting 1.1
-   miles from Valley View. The coordinates are right and the distance is
-   correct; the address block is wrong. ~1.65% of places have a postcode that
-   disagrees with their neighbours'. 0013 flags the tighter case — no
-   neighbour corroborates the locality — which is 0.74%, and the UI drops the
-   label rather than the place.
-
-**Keep auditing.** Three real findings in the first 25 rows is a good rate,
-and local knowledge is the only instrument that catches any of them.
-
-### Field testing needs a real build
-
-Expo Go loads JS from Metro over the local network, so it dies the moment the
-phone leaves the house — which is exactly where this app is meant to be used
-("usually in the car", §1). `docs/builds.md` has the EAS setup; the short
-version is `npx eas build -p android --profile preview` for a standalone APK.
-
-That also makes the app identifiers live: `app.goelsewhere.elsewhere` for
-both platforms. Free to change today, permanent for iOS after the first App
-Store submission, and entangled with the trademark question below.
-
-### Two product questions that now have numbers behind them
-
-- **About one card in four will have no rating, price or open-now.** Does an
-  unresolved place rank lower, get a distinct treatment, or drop out of the
-  shortlist? Dropping it would quietly reduce Elsewhere to "places Google
-  knows well", which is the opposite of the thesis.
-- **The daily quota is 60 calls for real accounts**, overridable per profile
-  (0019). Development accounts are set to 2000; the default stays 60 so that
-  raising it for building does not have to be remembered and undone before
-  launch.
-
-  **Pre-launch check:** confirm no unintended account carries an override.
-
-  ```sql
-  select id, daily_google_call_limit from profiles
-   where daily_google_call_limit is not null;
-  ```
-
-- **The quota day is UTC, which resets at 7pm Central.** A user's budget
-  refreshes in the middle of dinner, which is exactly when the app is used.
-  Not a bug, but arbitrary and odd-looking in production. Fixing it properly
-  means a timezone on `profiles` and a local day boundary in
-  `google_quota_reserve`.
-
-### Known follow-up: duplicate catalog rows
-
-`google_place_id_record()` flags the loser when two catalog rows resolve to
-the same Google place, because `places.google_place_id` is unique. Those are
-Overture duplicates of one restaurant and should be merged rather than
-flagged. Needs a dedupe pass; the flag keeps hydration working meanwhile.
-
-### Audit queue, when there is time
-
-Nothing here blocks promote. `reviewed = false` on every row of both maps.
-
-- `brand_cuisine_map`: 32 rows below 0.8. Dairy Queen vs DQ Grill & Chill is
-  the one worth a second opinion — the map disagrees with itself on purpose.
-- `category_cuisine_map`: the coarse fallbacks, where our taxonomy is thinner
-  than Overture's. `salvadoran_restaurant` (105 rows), `honduran_restaurant`
-  (36) and `venezuelan_restaurant` (27) all land on `latin-american`; the note
-  column records what was lost so it can be recovered if leaves are added.
-- **Taxonomy gaps still open:** no plain **American** leaf (943 rows on
-  `american_restaurant` → `new-american` at 0.65), no **hot dog** leaf (53
-  rows plus Wienerschnitzel), no generic **African** leaf (46 rows unmapped),
-  no **kosher** leaf. Chicken was the big one and is closed.
-
-### Things that will not work, already checked
-
-- **`alternate_categories` is a dead end.** 110 of 13,052 cuisine-less rows
-  have any. Do not build around it.
-- **`confidence` does not separate good rows from bad.** Suspect rows score
-  *higher* than normal ones (0.922 vs 0.886 mean, identical 0.95 median). It
-  is useless as a junk filter.
-- **Never substring-match brand names.** `brand_cuisine_map` is exact-match on
-  a normalized name for the same reason `%bar%` matched `barber`.
-
-### Data-quality items for before anyone sees the app
-
-None of these block the mapping work, but they all make a demo look broken:
-
-- **465 rows (1.2%) carry legal entity names**, e.g.
-  `Lsf5 Cactus, Llc.d/b/a Lone Star Steakhouse & Saloon`, `Rowdy's Diner,
-  Llc`. A mix of real restaurants filed under their LLC name — which display
-  terribly on a shortlist card — and genuine non-restaurants like
-  `Xalka Healthcare Solutions, Llc`.
-- **Delivery-only virtual brands** — resolved in 0007. Flagged, not dropped.
-  Promote must carry `delivery_only` onto `places`, and **a delivery-only
-  place must never be a Surprise Me pick** — that affordance means "go here
-  now".
-- **Vending machines as places** — `Coca-Cola Freestyle` (5) and `Coca-Cola`
-  (3) are mapped as food-and-drink POIs. Left unmapped deliberately.
-- **~90 places have non-Latin names** (Japanese, Thai, Korean) that normalize
-  to an empty string. 0005 rejects `''` as a key so they cannot collide; they
-  fall through to the category map instead.
+**Accounts and connections. The capture loop is built; identity is what makes
+it worth anything.**
+
+Three weeks of real use (2026-09-26 -> 2026-10-20) produced this, measured:
+
+    verdicts        20     <- 19 of them 'known', from the cold-start grid
+    real verdicts    1     <- one, ever
+    lock-ins         1
+    visits           0
+    sessions in Oct  ~6    <- Oct 6, 8, 9, 10, 11, 16
+
+Six sessions that captured nothing. The app was a browser. Diagnosis: a
+lock-in could only be made by committing to a place the reveal offered, and a
+verdict only by answering a prompt from such a lock-in -- so all of Layer 3
+was gated behind a list showing 15 of Denton's 750. The user went elsewhere
+and had no way to say so.
+
+Built 2026-10-20, not yet on device:
+  - catalog_find_by_name (migration 0057) + /find. Search any restaurant by
+    name, no radius, nearest first. Layer 1, zero Google calls.
+  - Place detail: "I'm going here" (lock-in -> schedules the existing review
+    prompt) and "I've been here" (verdict directly; ReviewCapture already
+    supported a null lockinId and had never been wired up).
+  - Paging past the first 15, catalog-only. Only the first page hydrates, so
+    browsing stays free. `ordered` / `shortlist` / `visible` are now three
+    different things on purpose.
+
+THE NEXT CHUNK IS ACCOUNTS, and it is not optional housekeeping. §3's ranking
+wants friend verdicts; §4 specifies verdict visibility; place detail is
+specified as yours, then your people, then Google. "Your people" is the
+product. Anonymous auth cannot express it.
+
+Sequencing, and the reason it is not a stall: Supabase converts an anonymous
+user in place, keeping the same auth.uid(), so everything recorded between now
+and then carries over and becomes attributable. Verify capture works first --
+one person's loop has to work before a group's can -- then accounts, then
+connections.
+
+Two things that unblock with accounts:
+  - `visits` is currently UNWRITABLE. household_id is NOT NULL and the RLS
+    policy is membership-based, so a solo user cannot insert one. That is why
+    the table has always been empty and why catalog_search's last_visited_at,
+    visit_count and p_unvisited_only are permanently inert. Recency decay --
+    CLAUDE.md calls it "the differentiator" -- has no data to act on.
+  - Connections and group sessions (§9), both still unstarted.
+
+Still open, unchanged:
+  - Re-measure calls per session. measurements.md is flagged stale.
+  - The review prompt has NO quiet-hours guard: `now + 6h` from an 8:30pm
+    lock-in schedules a 2:30am notification. Offered, never ruled on.
+  - "We didn't go" is one irreversible tap. It is now hidden where it has no
+    lock-in to resolve, but still unconfirmed where it does.
+  - Production channel is weeks behind preview.
+  - Gainesville / GAINESVILLE / Gainsville show as three towns.
 
 ## What changed in Overture, and why it matters
 

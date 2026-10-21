@@ -212,3 +212,45 @@ own backend, where it is not retained. The only data about a person that is
 stored is what they tell the app about places they have been. One third party
 — Google — sees the device's IP address, and only when a place's detail screen
 shows a reviewer's avatar.
+
+## The recurring Supabase RLS advisor email — assessed, no action
+
+Supabase emails "a table is publicly accessible because Row-Level Security is
+not enabled" for this project. Investigated 2026-10-20. **It is a false
+positive and there is nothing to do.**
+
+The table is `public.spatial_ref_sys` — PostGIS's own catalogue of EPSG
+coordinate-reference-system definitions. It is the only table in `public`
+without RLS. It holds no user data of any kind; it is published reference data
+that ships with the extension.
+
+Three things were established rather than assumed:
+
+1. **It cannot be fixed.** The table is owned by `supabase_admin`.
+   `alter table ... enable row level security` fails with *must be owner of
+   table spatial_ref_sys*, and `revoke` reports *no privileges could be
+   revoked* — on local and on cloud. PostGIS is installed into the `public`
+   schema, which is why its tables are linted at all, and relocating PostGIS
+   after the fact is not supported.
+
+2. **The grants look alarming and are not.** `anon` and `authenticated` both
+   hold `arwdDxtm` — all privileges, including DELETE — and PostgREST does
+   expose the table, so an anonymous caller holding the publishable key can
+   read it and in principle write to it.
+
+3. **The worst case does nothing.** Tested on local inside a transaction:
+   with SRID 4326 deleted outright, `catalog_search` still returned its 15
+   rows and `catalog_localities` its towns. PostGIS uses WGS84 constants for
+   the `geography` type rather than consulting the table, and this codebase
+   uses nothing else — no `ST_Transform`, no non-4326 SRIDs. Rolled back.
+
+So the exposure is public data, unfixable by us, and inert if vandalised.
+Dismiss the advisor in the dashboard. If it ever matters, it is a support
+request to Supabase, not a migration.
+
+**What the same check DID confirm is healthy:** no policy anywhere grants
+`anon` or `public` access to user data, and `brand_cuisine_map`,
+`google_api_usage`, `name_cuisine_map` and `overture_staging` have RLS enabled
+with zero policies — deny-by-default, reachable only by `service_role`, which
+is correct for tables only the edge function and ingest touch.
+

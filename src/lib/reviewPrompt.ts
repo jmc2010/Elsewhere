@@ -90,6 +90,37 @@ export async function ensureNotificationPermission(): Promise<boolean> {
  * capture for THAT place rather than dropping the user on the shortlist to
  * work out why their phone buzzed.
  */
+/**
+ * When to ask, given when the lock-in happened.
+ *
+ * `from + reviewPromptHours`, then clamped into the waking window: anything
+ * landing outside it moves to `catchUpHour` the next morning.
+ *
+ * Exported so it can be tested without scheduling anything -- the scheduling
+ * path needs a device, permissions and a notification channel, and none of
+ * that is needed to check arithmetic that was wrong for a month.
+ *
+ * All local time. `getHours()` is the device's zone, which is the only zone
+ * that matters here: 2am is defined by where the person is sleeping, not by
+ * UTC.
+ */
+export function promptTime(from: Date): Date {
+  const { startHour, endHour, catchUpHour } = tuning.recency.promptWindow;
+  const when = new Date(from.getTime() + tuning.recency.reviewPromptHours * 60 * 60 * 1000);
+
+  const hour = when.getHours();
+  if (hour >= startHour && hour < endHour) return when;
+
+  // Outside the window. Move to the catch-up hour on the next calendar day --
+  // unless it is still early morning on the SAME day, in which case this
+  // morning is already the next sensible moment and pushing another 24 hours
+  // would ask about dinner two nights later.
+  const target = new Date(when);
+  if (hour >= endHour) target.setDate(target.getDate() + 1);
+  target.setHours(catchUpHour, 0, 0, 0);
+  return target;
+}
+
 export async function scheduleReviewPrompt(
   lockinId: string,
   placeId: string,
@@ -108,7 +139,7 @@ export async function scheduleReviewPrompt(
       });
     }
 
-    const when = new Date(Date.now() + tuning.recency.reviewPromptHours * 60 * 60 * 1000);
+    const when = promptTime(new Date());
 
     const id = await Notifications.scheduleNotificationAsync({
       content: {

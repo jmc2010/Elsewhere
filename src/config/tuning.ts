@@ -226,6 +226,28 @@ export const tuning = {
      * still at the table.
      */
     reviewPromptHours: 6,
+
+    /**
+     * The waking window the prompt is allowed to land in, LOCAL time, 24h.
+     *
+     * Ruled 2026-10-20, and it is probably the main cause of the zero
+     * capture: "a 2:30am 'how was dinner?' is worse than no notification. It
+     * trains me to dismiss Elsewhere from the lock screen permanently."
+     *
+     * The arithmetic was never checked against the use case. Dinner is the
+     * product's whole occasion, so lock-ins cluster between 18:00 and 21:00,
+     * and `now + 6h` puts every single one of them between midnight and
+     * 03:00. The one real lock-in on record was 20:30, scheduling 02:30.
+     *
+     * Outside the window the prompt moves to `catchUpHour` the NEXT morning
+     * rather than to the window edge. Clamping to 21:00 would fire it while
+     * somebody is still at the table, which §15 already warns about above;
+     * morning is the better moment anyway, because the meal is finished and
+     * the answer is considered rather than snatched.
+     *
+     * Tune against: answer rate by hour of delivery, and dismissals.
+     */
+    promptWindow: { startHour: 8, endHour: 21, catchUpHour: 9 },
   },
 
   /**
