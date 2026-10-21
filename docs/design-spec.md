@@ -524,6 +524,36 @@ First run asks for **location only**. No account. The account is **deferred** an
 requested at the first moment it protects something real — after the second or
 third review — framed as not losing what you have told it.
 
+### The account is an email and a code, never a link
+
+Settled 2026-10-20. Writing the reason down because it is the kind of
+decision that looks arbitrary later and gets re-litigated by whoever next
+reads "magic links are simpler".
+
+**No social provider.** Offering Google or Facebook sign-in obliges us under
+Apple's guideline 4.8 to offer Sign in with Apple as well, and Sign in with
+Apple alone leaves Android with no path. Email needs no third-party SDK in
+the bundle, which also keeps the privacy audit's "no third-party SDKs"
+answer true.
+
+**A six-digit code, not a magic link.** A link has to leave the app, open a
+browser and deep-link back. It fails in in-app mail clients, on a second
+device, and behind corporate link scanners — and it fails *silently*, which
+this project has been bitten by twice already.
+
+The deciding reason is §11's, though: **this app is used in a car,
+mid-decision.** A code never makes you leave the screen you are on. A magic
+link does, and it does it at the exact moment somebody is deciding where to
+eat with three other people waiting. Identical security, identical Apple
+position, and one of them survives the context the product is actually used
+in.
+
+The cost is a template override: Supabase's default email-change template
+sends `{{ .ConfirmationURL }}`, and the code flow needs `{{ .Token }}`. That
+is one file locally and one dashboard field in the hosted project — and if
+the hosted one is missed, production sends links while the app asks for
+digits, with nothing failing loudly.
+
 The friend invite is offered after the app first gets something right, never at
 first run. Connections happen by a link sent to one person. **No contacts
 scrape.** The social layer must be invisible on screen when you have no

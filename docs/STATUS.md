@@ -281,6 +281,31 @@ Also changed in supabase/config.toml, all three making LOCAL match cloud:
   app's own first-run path), enable_confirmations false -> true, and the
   email_change template.
 
+CARRIED-FORWARD GAP, RECORDED 2026-10-20, TO BE DECIDED IN THE CONNECTIONS
+CHUNK — DO NOT PATCH IT BEFORE THEN:
+
+  households.created_by and meals.created_by are ON DELETE RESTRICT. Both
+  tables are empty today, so delete-account works and was verified working.
+
+  The moment group features ship, "Delete everything" starts FAILING for any
+  user who created a household -- and it fails as a server error, while
+  somebody is exercising a deletion right the privacy policy promises them
+  in writing. That is the worst possible place for a 500.
+
+  It must not be fixed as a patch at that point, because the fix is a
+  product decision, not a constraint choice: what happens to a group when
+  its founder leaves? Three shapes, and they are different products --
+    - ownership transfers to another member,
+    - SET NULL with a tombstone ("created by someone who left"),
+    - cascade, and the household dies with its creator.
+  Deciding that under pressure, inside a bug report about account deletion,
+  would pick whichever is easiest to implement. It belongs in §9 and should
+  be settled before the first household row exists.
+
+  Check when connections start: does delete-account still succeed for a user
+  who created a household? If the answer is no and nobody decided this, the
+  answer was decided by default.
+
 NOT DONE, deliberately: connections. Separate chunk, waiting on there being
 something worth sharing.
 
