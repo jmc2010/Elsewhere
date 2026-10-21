@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -105,6 +105,12 @@ export function ReviewCapture({
   const [note, setNote] = useState("");
   // `fine` shows nothing until asked. See `shown` below.
   const [expanded, setExpanded] = useState(false);
+  /** Whether "We didn't go" is armed for its confirming second tap. */
+  const [armed, setArmed] = useState(false);
+  const armTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (armTimer.current) clearTimeout(armTimer.current);
+  }, []);
 
   /**
    * Which tags to offer, if any.
@@ -241,8 +247,44 @@ export function ReviewCapture({
               go, and recording that honestly is better than leaving a
               phantom visit in the history. */}
           {onDidNotGo ? (
-            <Pressable onPress={onDidNotGo} accessibilityRole="button" hitSlop={8}>
-              <Text style={s.quiet}>We didn&apos;t go</Text>
+            /**
+             * Two taps, because one is irreversible.
+             *
+             * This resolves the lock-in with no verdict and cancels the
+             * notification: the place leaves the "How was it?" queue and
+             * nothing asks again. No undo, and no screen lists it afterwards.
+             * It sits opposite `Later`, which is completely benign, in the
+             * identical quiet style -- so the cheapest protection is to make
+             * the destructive one cost a second, deliberate tap.
+             *
+             * The armed state times out; a stray tap should not leave a live
+             * trigger under a thumb. No warning colour: brass is the only
+             * action colour in this palette, and §11 forbids state carried by
+             * colour regardless. The words change instead.
+             */
+            <Pressable
+              onPress={() => {
+                if (!armed) {
+                  setArmed(true);
+                  if (armTimer.current) clearTimeout(armTimer.current);
+                  armTimer.current = setTimeout(() => {
+                    armTimer.current = null;
+                    setArmed(false);
+                  }, 4000);
+                  return;
+                }
+                if (armTimer.current) clearTimeout(armTimer.current);
+                onDidNotGo();
+              }}
+              accessibilityRole="button"
+              accessibilityLabel={
+                armed ? "Confirm we did not go. This cannot be undone." : "We didn't go"
+              }
+              hitSlop={8}
+            >
+              <Text style={armed ? s.quietArmed : s.quiet}>
+                {armed ? "Tap again to confirm" : "We didn't go"}
+              </Text>
             </Pressable>
           ) : (
             // Holds the left end so `Later` stays right under space-between.
@@ -310,5 +352,8 @@ const build = ({ colours: c, space, radius, hairline }: Theme) =>
     btnLabelOff: { color: c.inkFaint },
     row: { flexDirection: "row", justifyContent: "space-between" },
     quiet: { ...type.meta, color: c.inkMuted },
+    /* Armed: full-strength ink and the heavier meta face. The warning
+       is in the words, not the colour. */
+    quietArmed: { ...type.metaStrong, color: c.ink },
     pressed: { opacity: 0.6 },
   });

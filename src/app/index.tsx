@@ -556,6 +556,30 @@ function Shortlist() {
     );
   }
 
+  /**
+   * How many places exist here before any choice I made.
+   *
+   * The denominator for the funnel line. It cannot come from `pool`, which
+   * is already filtered AND already truncated at poolLimit -- using it would
+   * produce "9 of 200" in Dallas, which states the cap rather than the
+   * catalog and is exactly the withholding this is meant to dispel.
+   */
+  const areaTotal = useQuery({
+    queryKey: ["area-total", centre?.lat, centre?.lon, radiusMiles],
+    enabled: centre !== null && radiusReady,
+    staleTime: 10 * 60 * 1000,
+    queryFn: async (): Promise<number> => {
+      const { data, error } = await supabase.rpc("catalog_area_total", {
+        p_lat: centre!.lat,
+        p_lon: centre!.lon,
+        p_radius_meters: radiusMiles * MILES,
+        p_include_non_destinations: tuning.catalog.includeNonDestinations,
+      });
+      if (error) throw error;
+      return Number(data ?? 0);
+    },
+  });
+
   const cuisineGroups = useQuery({
     queryKey: ["cuisine-counts", centre?.lat, centre?.lon, radiusMiles],
     enabled: centre !== null && radiusReady,
@@ -625,6 +649,56 @@ function Shortlist() {
       return (data ?? []) as Tag[];
     },
   });
+
+  /**
+   * Label for a cuisine slug. The groups query only covers what is in range,
+   * and a selected slug may be a leaf rather than a group, so fall back to
+   * prettifying the slug rather than rendering a raw `tex-mex`.
+   */
+  const cuisineLabel = useCallback(
+    (slug: string) =>
+      cuisineGroups.data?.find((g) => g.slug === slug)?.label ??
+      slug.replace(/-/g, " ").replace(/\b\w/g, (ch) => ch.toUpperCase()),
+    [cuisineGroups.data],
+  );
+
+  const funnel = useMemo(() => {
+    if (visible.length === 0) return null;
+
+    const townName = origin.kind === "town" ? origin.name : null;
+    const townTotal =
+      townName !== null
+        ? (towns.data ?? []).find((t) => t.locality === townName)?.place_count ?? null
+        : null;
+    const total = townTotal ?? areaTotal.data ?? null;
+    if (total === null) return null;
+
+    const head =
+      townTotal !== null
+        ? `${visible.length} of ${total.toLocaleString()} in ${townName}`
+        : `${visible.length} of ${total.toLocaleString()} within ${radiusMiles} miles`;
+
+    const clauses: string[] = [];
+    // Only when the denominator is a town, or the radius is already stated
+    // in the head and repeating it reads as padding.
+    if (townTotal !== null) clauses.push(`within ${radiusMiles} miles`);
+    if (filters.cuisines.length > 0) {
+      clauses.push(filters.cuisines.map(cuisineLabel).join(" or "));
+    }
+    if (filters.moodTags.length > 0) {
+      clauses.push(
+        filters.moodTags
+          .map((k) => tagList.data?.find((t) => t.key === k)?.label ?? k)
+          .join(" and "),
+      );
+    }
+    if (filters.openNow) clauses.push("open now");
+
+    return clauses.length > 0 ? `${head} — ${clauses.join(", ")}.` : `${head}.`;
+  }, [
+    visible.length, origin, towns.data, areaTotal.data,
+    radiusMiles, filters, cuisineLabel, tagList.data,
+  ]);
 
   const resolveLockin = useCallback(
     async (lockinId: string, didGo: boolean, result: ReviewResult | null, placeId?: string) => {
@@ -1011,6 +1085,22 @@ function Shortlist() {
             </Text>
           </Pressable>
         </View>
+
+            {/*
+              The funnel, stated.
+
+              "Nine out of 1,171 reads as withholding when nothing on screen
+              says what produced the nine." Every clause here is a choice the
+              user made, measured against the real catalog total rather than
+              against the pool -- the pool is already filtered and already
+              capped, so quoting it would state the cap and call it the
+              catalog.
+
+              The denominator is the TOWN total when you picked a town,
+              because that is the number you are implicitly comparing against
+              ("1,171 in Frisco"), and the in-radius total otherwise.
+            */}
+            {funnel ? <Text style={s.funnel}>{funnel}</Text> : null}
 
             <View style={s.list}>
               {/* `visible`, not `shortlist`. Everything past the first page
@@ -1417,6 +1507,9 @@ const build = ({ colours: c, space, radius, hairline }: Theme) =>
     morePressed: { opacity: 0.6 },
     moreLabel: { ...type.button, color: c.brass },
     moreCount: { ...type.tileMeta, color: c.inkFaint },
+    /* Meta weight. It is an explanation, not a heading -- it should be
+       readable and ignorable in the same glance. */
+    funnel: { ...type.tileMeta, color: c.inkMuted, marginBottom: space.md },
     findRow: { paddingVertical: space.lg, alignItems: "center", rowGap: 4 },
     findLabel: { ...type.button, color: c.ink },
     btnWide: { paddingHorizontal: 0, marginTop: 0, paddingVertical: 13 },

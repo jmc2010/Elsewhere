@@ -51,6 +51,9 @@ interface Detail {
   my_note: string | null;
   my_visited_on: string | null;
   my_tags: string[];
+  /** Your most recent lock-in here. Present without a verdict means you went
+   *  and were never successfully asked how it was. */
+  last_locked_at: string | null;
 }
 
 interface GoogleReview {
@@ -378,7 +381,22 @@ function PlaceDetail() {
             style={({ pressed }) => [s.cap, pressed && s.capPressed]}
           >
             <Text style={s.capLabel}>
-              {d.my_verdict ? "Change what I said" : "I've been here"}
+              {/*
+                Three states, and the middle one is the whole point.
+
+                A place with a lock-in but no verdict is somewhere you WENT
+                and were never successfully asked about -- the backlog the
+                2:30am prompt created. "I've been here" is the wrong question
+                to ask about it; you already told the app you were going.
+                "How was it?" is the question that was missed, and it is now
+                sitting on the screen permanently instead of inside a
+                notification that fired while you were asleep.
+              */}
+              {d.my_verdict
+                ? "Change what I said"
+                : d.last_locked_at
+                  ? "How was it?"
+                  : "I've been here"}
             </Text>
           </Pressable>
         </View>

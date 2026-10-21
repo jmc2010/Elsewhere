@@ -1,11 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { router } from "expo-router";
+import { useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useThemeControl } from "@/app/_layout";
 import { tuning } from "@/config/tuning";
 import type { ThemePreference } from "@/lib/themePreference";
+import { ReviewCapture, type ReviewResult, type Tag } from "@/components/ReviewCapture";
 import { supabase } from "@/lib/supabase";
 import { useTheme, type Theme, type ThemeName } from "@/theme/tokens";
 import { type } from "@/theme/type";
@@ -43,6 +45,12 @@ interface ShelfPlace {
   updatedAt: string;
 }
 
+interface LockinRow {
+  place_id: string;
+  locked_at: string;
+  places: { display_name: string; locality: string | null }[] | null;
+}
+
 export default function ShelfRoute() {
   return <Shelf />;
 }
@@ -78,6 +86,108 @@ function Shelf() {
     },
   });
 
+  /**
+   * Places you went and were never asked about.
+   *
+   * A lock-in resolved did_go with no verdict against the same place. Until
+   * now these were invisible everywhere: the shelf is built from
+   * place_verdicts, so somewhere you went but never rated appeared in no
+   * list at all, and the only thing that would ever ask was a notification
+   * that fired at 2:30am. "A feature reachable solely from a notification I
+   * never receive does not exist."
+   *
+   * This is that backlog, on a screen, permanently. Both tables are
+   * RLS-scoped to auth.uid(), so no user filter is needed.
+   */
+  const unreviewed = useQuery({
+    queryKey: ["shelf-unreviewed"],
+    queryFn: async (): Promise<ShelfPlace[]> => {
+      const { data: lockins, error } = await supabase
+        .from("place_lockins")
+        .select("place_id, locked_at, places(display_name, locality)")
+        .eq("did_go", true)
+        .order("locked_at", { ascending: false });
+      if (error) throw error;
+
+      const { data: verdicts, error: vErr } = await supabase
+        .from("place_verdicts")
+        .select("place_id");
+      if (vErr) throw vErr;
+      const rated = new Set((verdicts ?? []).map((v) => v.place_id as string));
+
+      const seen = new Set<string>();
+      const out: ShelfPlace[] = [];
+      for (const l of (lockins ?? []) as LockinRow[]) {
+        // One row per place, not per visit: three unreviewed trips to the
+        // same place is still one question.
+        if (rated.has(l.place_id) || seen.has(l.place_id)) continue;
+        seen.add(l.place_id);
+        out.push({
+          placeId: l.place_id,
+          name: l.places?.[0]?.display_name ?? "Somewhere",
+          locality: l.places?.[0]?.locality ?? null,
+          updatedAt: l.locked_at,
+        });
+      }
+      return out;
+    },
+  });
+
+  const [reviewing, setReviewing] = useState<ShelfPlace | null>(null);
+
+  const tagList = useQuery({
+    queryKey: ["tags"],
+    staleTime: Infinity,
+    queryFn: async (): Promise<Tag[]> => {
+      const { data, error } = await supabase
+        .from("tags").select("key,label,valence").order("sort_order");
+      if (error) throw error;
+      return (data ?? []) as Tag[];
+    },
+  });
+
+  /**
+   * Writes the verdict and tags only.
+   *
+   * Deliberately NOT a lock-in, unlike "I've been here" on place detail:
+   * everything in this section already HAS a resolved lock-in -- that is
+   * precisely why it is listed -- and inserting another would count one
+   * dinner as two visits in the ledger catalog_search now reads frequency
+   * from.
+   */
+  const review = useMutation({
+    mutationFn: async ({ placeId, r }: { placeId: string; r: ReviewResult }) => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error("No session.");
+      const { data: verdict, error } = await supabase
+        .from("place_verdicts")
+        .upsert(
+          {
+            user_id: user.id,
+            place_id: placeId,
+            verdict: r.verdict,
+            note: r.note,
+            visited_on: new Date().toISOString().slice(0, 10),
+          },
+          { onConflict: "user_id,place_id" },
+        )
+        .select("id")
+        .single();
+      if (error) throw error;
+      await supabase.from("verdict_tags").delete().eq("verdict_id", verdict.id);
+      if (r.tagKeys.length > 0) {
+        await supabase.from("verdict_tags").insert(
+          r.tagKeys.map((tag_key) => ({ verdict_id: verdict.id, tag_key })),
+        );
+      }
+    },
+    onSuccess: () => {
+      setReviewing(null);
+      void qc.invalidateQueries({ queryKey: ["shelf"] });
+      void qc.invalidateQueries({ queryKey: ["shelf-unreviewed"] });
+    },
+  });
+
   // Reversing a veto deletes the verdict outright rather than downgrading it
   // to `fine`. "I take that back" is not the same claim as "it was fine", and
   // recording the weaker claim would invent an opinion nobody expressed.
@@ -91,6 +201,18 @@ function Shelf() {
       void qc.invalidateQueries({ queryKey: ["catalog_search"] });
     },
   });
+
+  if (reviewing && tagList.data) {
+    return (
+      <ReviewCapture
+        subject={{ placeId: reviewing.placeId, name: reviewing.name, lockinId: null }}
+        tags={tagList.data}
+        busy={review.isPending}
+        onSubmit={(r) => review.mutate({ placeId: reviewing.placeId, r })}
+        onDismiss={() => setReviewing(null)}
+      />
+    );
+  }
 
   return (
     <View style={[s.screen, { paddingTop: insets.top }]}>
@@ -109,6 +231,34 @@ function Shelf() {
           <Text style={s.body}>{(rows.error as Error).message}</Text>
         ) : (
           <>
+            {/* First, above everything, because it is the only section that
+                is a QUESTION rather than a record. These are places you went
+                and nobody ever asked about. */}
+            {(unreviewed.data?.length ?? 0) > 0 ? (
+              <View style={s.section}>
+                <Text style={s.sectionTitle}>How was it?</Text>
+                <Text style={s.hint}>
+                  You went to these and never said. One tap each — it&apos;s what
+                  makes the shortlist yours.
+                </Text>
+                {unreviewed.data!.map((p2) => (
+                  <Pressable
+                    key={p2.placeId}
+                    onPress={() => setReviewing(p2)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Review ${p2.name}`}
+                    style={({ pressed }) => [s.row, pressed && s.pressed]}
+                  >
+                    <View style={s.rowText}>
+                      <Text style={s.rowName}>{p2.name}</Text>
+                      {p2.locality ? <Text style={s.rowMeta}>{p2.locality}</Text> : null}
+                    </View>
+                    <Text style={s.rowAction}>Review</Text>
+                  </Pressable>
+                ))}
+              </View>
+            ) : null}
+
             <Section
               title="Your usuals"
               hint="Places you said you'd go back to. They stay off the shortlist until they've been out of rotation long enough to be news again."
@@ -291,6 +441,9 @@ const build = ({ colours: c, space, radius, hairline }: Theme) =>
     rowText: { flexShrink: 1, rowGap: 2 },
     rowName: { ...type.sheetHead, color: c.ink },
     rowMeta: { ...type.tileMeta, color: c.inkMuted },
+    /* Names the action on the row itself, so the section reads as a
+       queue of questions rather than a list of links. */
+    rowAction: { ...type.meta, color: c.brass },
     undo: { borderWidth: hairline, borderColor: c.brass, borderRadius: radius.pill, paddingVertical: 6, paddingHorizontal: space.md },
     undoLabel: { ...type.tileMeta, color: c.brass },
     pressed: { opacity: 0.6 },
