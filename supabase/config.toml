@@ -174,7 +174,10 @@ refresh_token_reuse_interval = 10
 # Allow/disallow new user signups to your project.
 enable_signup = true
 # Allow/disallow anonymous sign-ins to your project.
-enable_anonymous_sign_ins = false
+# Cloud has this ON -- the app's entire auth model is anonymous sign-in
+# (lib/supabase.ts ensureSession). Local had it off, so local could not
+# reproduce the app's own first-run path at all.
+enable_anonymous_sign_ins = true
 # Allow/disallow testing manual linking of accounts
 enable_manual_linking = false
 # Passwords shorter than this value will be rejected as weak. Minimum 6, recommended 8 or more.
@@ -222,7 +225,13 @@ enable_signup = true
 # addresses. If disabled, only the new email is required to confirm.
 double_confirm_changes = true
 # If enabled, users need to confirm their email address before signing in.
-enable_confirmations = false
+# Production MUST have this on: with it off, anyone can claim any email
+# address, including one they do not control, and the account that holds
+# the ledger would be 'protected' by an address that cannot recover it.
+# Local mirrors it so the two-step OTP conversion is the path actually
+# exercised in development. Local mail is captured by Mailpit (:54324),
+# so nothing is really sent.
+enable_confirmations = true
 # If enabled, users will need to reauthenticate or have logged in recently to change their password.
 secure_password_change = false
 # Controls the minimum amount of time that must pass before sending another signup confirmation or password reset email.
@@ -252,6 +261,13 @@ otp_expiry = 3600
 # enabled = true
 # subject = "Your password has been changed"
 # content_path = "./supabase/templates/password_changed_notification.html"
+
+# Overridden so the email-change confirmation carries a six-digit code
+# rather than a link. See supabase/templates/email_change.html for why, and
+# note that the hosted project needs the same change made in its dashboard.
+[auth.email.template.email_change]
+subject = "Your Elsewhere code"
+content_path = "./supabase/templates/email_change.html"
 
 [auth.sms]
 # Allow/disallow new user signups via SMS to your project.

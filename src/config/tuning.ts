@@ -248,6 +248,30 @@ export const tuning = {
      * Tune against: answer rate by hour of delivery, and dismissals.
      */
     promptWindow: { startHour: 8, endHour: 21, catchUpHour: 9 },
+
+    /**
+     * How many real reviews before the account is offered.
+     *
+     * §8 is emphatic that the ask is deferred and EARNED: it appears at the
+     * moment it protects something, framed as what it saves rather than what
+     * it unlocks. Asking at launch is the Plaid wall that is the competitor's
+     * structural weakness, and the frictionless first run is a position
+     * (§6), not an oversight.
+     *
+     * Counts REAL reviews only -- verdicts that are not `known`. The
+     * recognition grid produces a dozen `known` rows in one sitting and they
+     * are recognition, not reviews; triggering on them would put the ask in
+     * front of somebody on their first evening, which is the thing this
+     * number exists to prevent.
+     *
+     * Shown at most ONCE, ever. Declining is permanent and invisible: no
+     * nag, no badge, nothing held back. It remains reachable from the shelf
+     * forever, so declining costs nothing and changing your mind is possible
+     * without ever being pushed.
+     *
+     * Tune against: conversion rate, and whether anybody reaches it at all.
+     */
+    accountPromptAfterReviews: 3,
   },
 
   /**

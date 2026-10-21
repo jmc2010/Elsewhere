@@ -237,60 +237,52 @@ Three bugs found by measuring rather than reading, all worth remembering:
 
 ## Next
 
-**Accounts and connections. The capture loop is built; identity is what makes
-it worth anything.**
+**Accounts are built and proven on local. Three cloud prerequisites are
+yours, and nothing works on a device until they are done.**
 
-Three weeks of real use (2026-09-26 -> 2026-10-20) produced this, measured:
+Built 2026-10-20, local only. Not on cloud, not on any channel:
+  - AccountPrompt: deferred to `accountPromptAfterReviews` (3) REAL reviews,
+    framed by what it saves, shown at most once, declining permanent and
+    silent. Permanently reachable afterwards from the shelf, which is what
+    makes declining costless.
+  - Conversion is updateUser({email}) -> verifyOtp({type:'email_change'}).
+  - Shelf: "Your account" section with "Keep my history" and "Delete
+    everything" (two taps, 5s disarm).
+  - supabase/functions/delete-account: service_role, deletes the auth user,
+    cascade does the rest.
+  - supabase/templates/email_change.html: the template that makes it a CODE.
 
-    verdicts        20     <- 19 of them 'known', from the cold-start grid
-    real verdicts    1     <- one, ever
-    lock-ins         1
-    visits           0
-    sessions in Oct  ~6    <- Oct 6, 8, 9, 10, 11, 16
+PROVEN ON LOCAL, not assumed:
+  - uid preserved through conversion, with a real ledger attached:
+      before 7ebbf0f3-e4e1-4dde-b645-eb14ca6f2ffc  anonymous
+      code   375223
+      after  7ebbf0f3-e4e1-4dde-b645-eb14ca6f2ffc  convert2@example.test
+      verdicts 1, lock-ins 1 still owned
+  - deletion: profile/verdicts/tags/lock-ins 1,1,1,1 -> 0,0,0,0, auth user
+    gone. google_api_usage is SET NULL, so Google spend history survives
+    anonymised rather than being rewritten by a deletion.
 
-Six sessions that captured nothing. The app was a browser. Diagnosis: a
-lock-in could only be made by committing to a place the reveal offered, and a
-verdict only by answering a prompt from such a lock-in -- so all of Layer 3
-was gated behind a list showing 15 of Denton's 750. The user went elsewhere
-and had no way to say so.
+YOURS, AND THE FEATURE DOES NOT WORK WITHOUT THEM:
+  1. Email confirmations ON in the cloud dashboard. With them off, anyone
+     can claim any address and the account "protecting" the ledger is
+     secured by an email nobody controls.
+  2. The "Change Email Address" template in the dashboard must use
+     {{ .Token }}. Supabase's default sends a LINK -- discovered in testing,
+     and with the default template production would send links while the app
+     asks for a code. supabase/templates/email_change.html is the local copy
+     to mirror.
+  3. Deploy the edge function: `supabase functions deploy delete-account`.
+     This needs the CLI access token, which is behind the broken login
+     keychain -- so it may have to be done from the dashboard, or the
+     keychain repaired first (Keychain Access -> login -> Change Password).
 
-Built 2026-10-20, not yet on device:
-  - catalog_find_by_name (migration 0057) + /find. Search any restaurant by
-    name, no radius, nearest first. Layer 1, zero Google calls.
-  - Place detail: "I'm going here" (lock-in -> schedules the existing review
-    prompt) and "I've been here" (verdict directly; ReviewCapture already
-    supported a null lockinId and had never been wired up).
-  - Paging past the first 15, catalog-only. Only the first page hydrates, so
-    browsing stays free. `ordered` / `shortlist` / `visible` are now three
-    different things on purpose.
+Also changed in supabase/config.toml, all three making LOCAL match cloud:
+  enable_anonymous_sign_ins false -> true (local could not reproduce the
+  app's own first-run path), enable_confirmations false -> true, and the
+  email_change template.
 
-THE NEXT CHUNK IS ACCOUNTS, and it is not optional housekeeping. §3's ranking
-wants friend verdicts; §4 specifies verdict visibility; place detail is
-specified as yours, then your people, then Google. "Your people" is the
-product. Anonymous auth cannot express it.
-
-Sequencing, and the reason it is not a stall: Supabase converts an anonymous
-user in place, keeping the same auth.uid(), so everything recorded between now
-and then carries over and becomes attributable. Verify capture works first --
-one person's loop has to work before a group's can -- then accounts, then
-connections.
-
-Two things that unblock with accounts:
-  - `visits` is currently UNWRITABLE. household_id is NOT NULL and the RLS
-    policy is membership-based, so a solo user cannot insert one. That is why
-    the table has always been empty and why catalog_search's last_visited_at,
-    visit_count and p_unvisited_only are permanently inert. Recency decay --
-    CLAUDE.md calls it "the differentiator" -- has no data to act on.
-  - Connections and group sessions (§9), both still unstarted.
-
-Still open, unchanged:
-  - Re-measure calls per session. measurements.md is flagged stale.
-  - The review prompt has NO quiet-hours guard: `now + 6h` from an 8:30pm
-    lock-in schedules a 2:30am notification. Offered, never ruled on.
-  - "We didn't go" is one irreversible tap. It is now hidden where it has no
-    lock-in to resolve, but still unconfirmed where it does.
-  - Production channel is weeks behind preview.
-  - Gainesville / GAINESVILLE / Gainsville show as three towns.
+NOT DONE, deliberately: connections. Separate chunk, waiting on there being
+something worth sharing.
 
 ## What changed in Overture, and why it matters
 

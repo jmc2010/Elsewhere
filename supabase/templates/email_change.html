@@ -1,0 +1,24 @@
+<!--
+  The email-change template, overridden so it carries a CODE.
+
+  Supabase's default sends {{ .ConfirmationURL }} -- a link, which has to
+  leave the app, open a browser and deep-link back. That path fails in in-app
+  mail clients, on a second device, and behind corporate link scanners, and
+  when it fails it fails silently.
+
+  {{ .Token }} is the six-digit OTP for the same verification. Same security,
+  no round trip. The app pairs it with verifyOtp({type:'email_change'}).
+
+  NOTE FOR CLOUD: this file configures LOCAL only. The hosted project has its
+  own copy under Authentication -> Email Templates -> "Change Email Address",
+  and it must be changed there too or production will send links while the
+  app asks for a code.
+-->
+<h2>Your Elsewhere code</h2>
+
+<p>Enter this in the app to keep your history:</p>
+
+<p style="font-size:28px;letter-spacing:6px;font-weight:600">{{ .Token }}</p>
+
+<p>It works for one hour. If you didn't ask for this, ignore it — nothing
+changes.</p>

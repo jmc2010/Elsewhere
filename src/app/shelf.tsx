@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useThemeControl } from "@/app/_layout";
 import { tuning } from "@/config/tuning";
 import type { ThemePreference } from "@/lib/themePreference";
+import { AccountPrompt } from "@/components/AccountPrompt";
 import { ReviewCapture, type ReviewResult, type Tag } from "@/components/ReviewCapture";
 import { supabase } from "@/lib/supabase";
 import { useTheme, type Theme, type ThemeName } from "@/theme/tokens";
@@ -134,6 +135,52 @@ function Shelf() {
   });
 
   const [reviewing, setReviewing] = useState<ShelfPlace | null>(null);
+  const [converting, setConverting] = useState(false);
+  const [armedDelete, setArmedDelete] = useState(false);
+
+  const account = useQuery({
+    queryKey: ["account"],
+    queryFn: async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      const { count: verdicts } = await supabase
+        .from("place_verdicts").select("place_id", { count: "exact", head: true });
+      const { count: tags } = await supabase
+        .from("verdict_tags").select("verdict_id", { count: "exact", head: true });
+      return {
+        anonymous: user?.is_anonymous ?? true,
+        email: user?.email ?? null,
+        things: (verdicts ?? 0) + (tags ?? 0),
+      };
+    },
+  });
+
+  /**
+   * Delete everything, for real.
+   *
+   * The edge function holds service_role and deletes the auth user, which
+   * cascades to profiles and from there to every verdict, tag, lock-in,
+   * correction and impression. google_api_usage is SET NULL rather than
+   * cascaded, so the Google spend ledger survives with nobody attached --
+   * anonymisation, not retention, and it keeps the billing history honest.
+   *
+   * Signing out afterwards is not cosmetic: the session's uid no longer
+   * exists, so every subsequent request would 401 until the app got a new
+   * anonymous identity. Signing out makes ensureSession() mint one on the
+   * next launch, which is the correct "start over" state.
+   */
+  const wipe = useMutation({
+    mutationFn: async () => {
+      const { error } = await supabase.functions.invoke("delete-account", { body: {} });
+      if (error) throw error;
+      await supabase.auth.signOut();
+    },
+    onSuccess: () => {
+      setArmedDelete(false);
+      qc.clear();
+      router.replace("/");
+    },
+  });
+
 
   const tagList = useQuery({
     queryKey: ["tags"],
@@ -201,6 +248,19 @@ function Shelf() {
       void qc.invalidateQueries({ queryKey: ["catalog_search"] });
     },
   });
+
+  if (converting) {
+    return (
+      <AccountPrompt
+        things={account.data?.things ?? 0}
+        onConverted={() => {
+          setConverting(false);
+          void account.refetch();
+        }}
+        onDecline={() => setConverting(false)}
+      />
+    );
+  }
 
   if (reviewing && tagList.data) {
     return (
@@ -302,6 +362,83 @@ function Shelf() {
                   </View>
                 ))
               )}
+            </View>
+
+            {/* Account sits beside the veto list, because both are about
+                what the app is holding on your behalf. */}
+            <View style={s.section}>
+              <Text style={s.sectionTitle}>Your account</Text>
+              {account.data?.anonymous === false ? (
+                <>
+                  <Text style={s.hint}>
+                    Saved to {account.data.email}. Your history survives this
+                    phone.
+                  </Text>
+                </>
+              ) : (
+                <>
+                  <Text style={s.hint}>
+                    Everything you&apos;ve told me lives on this phone only. An
+                    email address keeps it if the phone doesn&apos;t.
+                  </Text>
+                  {/* Permanently available, never pushed. This is what makes
+                      "no thanks" costless: declining the one proactive ask
+                      withholds nothing, because the offer never leaves. */}
+                  <Pressable
+                    onPress={() => setConverting(true)}
+                    accessibilityRole="button"
+                    style={({ pressed }) => [s.row, pressed && s.pressed]}
+                  >
+                    <View style={s.rowText}>
+                      <Text style={s.rowName}>Keep my history</Text>
+                    </View>
+                    <Text style={s.rowAction}>Add email</Text>
+                  </Pressable>
+                </>
+              )}
+
+              {/* In-app deletion. Apple expects it from any app with
+                  accounts, and docs/privacy-data-flows.md promised deletion
+                  by email -- a weak answer if a reviewer probes it. Two taps,
+                  same reasoning as "We didn't go": it is irreversible and it
+                  sits among ordinary rows. */}
+              <Pressable
+                onPress={() => {
+                  if (!armedDelete) {
+                    setArmedDelete(true);
+                    setTimeout(() => setArmedDelete(false), 5000);
+                    return;
+                  }
+                  wipe.mutate();
+                }}
+                disabled={wipe.isPending}
+                accessibilityRole="button"
+                accessibilityLabel={
+                  armedDelete
+                    ? "Confirm deleting everything. This cannot be undone."
+                    : "Delete everything"
+                }
+                style={({ pressed }) => [s.row, pressed && s.pressed]}
+              >
+                <View style={s.rowText}>
+                  <Text style={armedDelete ? s.rowNameArmed : s.rowName}>
+                    {wipe.isPending
+                      ? "Deleting…"
+                      : armedDelete
+                        ? "Tap again — this deletes everything"
+                        : "Delete everything"}
+                  </Text>
+                  {!armedDelete && !wipe.isPending ? (
+                    <Text style={s.rowMeta}>
+                      Every verdict, visit and correction. Immediate, and I
+                      can&apos;t undo it.
+                    </Text>
+                  ) : null}
+                </View>
+              </Pressable>
+              {wipe.isError ? (
+                <Text style={s.hint}>{(wipe.error as Error).message}</Text>
+              ) : null}
             </View>
 
             <View style={s.section}>
@@ -444,6 +581,9 @@ const build = ({ colours: c, space, radius, hairline }: Theme) =>
     /* Names the action on the row itself, so the section reads as a
        queue of questions rather than a list of links. */
     rowAction: { ...type.meta, color: c.brass },
+    /* Armed delete: heavier face, full-strength ink, and the warning in
+       the words. No red — brass is the only action colour (§1). */
+    rowNameArmed: { ...type.sheetHead, color: c.ink },
     undo: { borderWidth: hairline, borderColor: c.brass, borderRadius: radius.pill, paddingVertical: 6, paddingHorizontal: space.md },
     undoLabel: { ...type.tileMeta, color: c.brass },
     pressed: { opacity: 0.6 },

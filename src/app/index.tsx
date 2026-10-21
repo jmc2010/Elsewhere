@@ -25,6 +25,8 @@ import { LocationPicker, type Origin, type Town } from "@/components/LocationPic
 import { ReviewCapture, type ReviewResult, type Tag } from "@/components/ReviewCapture";
 import { SurpriseReveal, type RevealCandidate } from "@/components/SurpriseReveal";
 import { tuning } from "@/config/tuning";
+import { AccountPrompt } from "@/components/AccountPrompt";
+import { hasBeenAskedAboutAccount, markAskedAboutAccount } from "@/lib/accountPrompt";
 import { loadRadiusPreference, saveRadiusPreference } from "@/lib/radiusPreference";
 import { appTier } from "@/lib/appTier";
 import { hasSeenColdStart } from "@/lib/coldStart";
@@ -636,6 +638,43 @@ function Shortlist() {
   });
 
   // Fixed vocabulary, 20 rows, effectively immutable.
+  /**
+   * Whether the account offer has been earned, and the honest count for it.
+   *
+   * `reviews` counts REAL verdicts -- not `known`, which the recognition
+   * grid produces a dozen of in one sitting. `things` is everything they
+   * have told the app, verdicts and tags together, because that is what the
+   * copy claims and the copy must be true.
+   */
+  const accountStanding = useQuery({
+    queryKey: ["account-standing", userId],
+    enabled: userId !== null,
+    staleTime: 60 * 1000,
+    queryFn: async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      const { count: reviews } = await supabase
+        .from("place_verdicts")
+        .select("place_id", { count: "exact", head: true })
+        .neq("verdict", "known");
+      const { count: verdicts } = await supabase
+        .from("place_verdicts")
+        .select("place_id", { count: "exact", head: true });
+      const { count: tags } = await supabase
+        .from("verdict_tags")
+        .select("verdict_id", { count: "exact", head: true });
+      return {
+        anonymous: user?.is_anonymous ?? true,
+        reviews: reviews ?? 0,
+        things: (verdicts ?? 0) + (tags ?? 0),
+      };
+    },
+  });
+
+  const [askedAboutAccount, setAskedAboutAccount] = useState<boolean | null>(null);
+  useEffect(() => {
+    void hasBeenAskedAboutAccount().then(setAskedAboutAccount);
+  }, []);
+
   const tagList = useQuery({
     queryKey: ["tags"],
     enabled: userId !== null,
@@ -829,6 +868,35 @@ function Shortlist() {
       />
     );
   }
+  /**
+   * The account offer. Last of the interstitials on purpose.
+   *
+   * It must never pre-empt a review -- the ask is supposed to FOLLOW having
+   * told the app something, and jumping the queue would make it the price of
+   * answering rather than a consequence of it. So it sits below the review
+   * capture, and below cold start, and shows only once.
+   */
+  if (
+    askedAboutAccount === false &&
+    accountStanding.data &&
+    accountStanding.data.anonymous &&
+    accountStanding.data.reviews >= tuning.recency.accountPromptAfterReviews
+  ) {
+    return (
+      <AccountPrompt
+        things={accountStanding.data.things}
+        onConverted={() => {
+          void markAskedAboutAccount().then(() => setAskedAboutAccount(true));
+          void accountStanding.refetch();
+        }}
+        onDecline={() => {
+          // Permanent and silent. Nothing else changes anywhere.
+          void markAskedAboutAccount().then(() => setAskedAboutAccount(true));
+        }}
+      />
+    );
+  }
+
   if (needsColdStart === null && userId !== null) {
     return <Spinner />;
   }
