@@ -109,6 +109,30 @@ a downtown Dallas slice, ~1,470 rows. Regenerate with
 three density regimes is what development needs; 39k rows would only be
 slower to reset.
 
+## A migration must never derive data from the contents of a table
+
+The same file runs against an **empty local database** and a **populated
+cloud one**. Anything computed from existing rows therefore diverges silently
+between them: it does the right thing on cloud, where the data is already
+there, and quietly nothing on local, where `seed.sql` loads *after* every
+migration has run.
+
+Silently is the problem. Nothing fails, nothing warns, and the two databases
+stop agreeing about something nobody is looking at.
+
+Two acceptable forms:
+
+- **Embed the data as versioned rows in the migration**, so the values are
+  auditable in the diff rather than inferred at runtime.
+- **Compute it in a trigger**, so the property belongs to the table rather
+  than to one write path — which also covers `promote`, `seed.sql`, and any
+  row inserted by hand.
+
+Found twice in one session, both in 0060: the `locality_raw` backfill, and
+then `locality_canonical`, which was built the same way. **The second only
+surfaced because the first had been looked for.** When this bites, check
+whether it bit more than once in the same file.
+
 ## Never run `supabase db push` against this project
 
 The cloud database **has no migration history**. `supabase_migrations` does not
